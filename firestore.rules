@@ -1,0 +1,224 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Models
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {uid} (Firebase Auth UID)
+    // Fields:
+    //   - uid:               string  (required, immutable) - Firebase UID
+    //   - fullName:          string  (optional, max 100) - Display name
+    //   - email:             string  (optional, max 254) - Email address (PII)
+    //   - userType:          string  (required) - "Turist" | "Sakin" | "Özel Gereksinimli"
+    //   - isVolunteer:       bool    (required) - Gönüllü mü?
+    //   - touristInterests:  list    (optional, max 20 items) - İlgi alanları
+    //   - volunteerSkills:   list    (optional, max 20 items) - Gönüllü becerileri
+    //   - accessibilityPrefs: list   (optional, max 20 items) - Erişilebilirlik tercihleri
+    //   - fcmToken:          string  (optional, max 200) - FCM push bildirimi token'ı
+    //
+    // Collection: cagrilar
+    // Document ID: {cagriId} (UUID)
+    // Fields:
+    //   - callId:          string     (required, immutable) - UUID
+    //   - kanal_adi:       string     (required, immutable) - Agora channel adı (UUID)
+    //   - cagri_durumu:    string     (required) - "bekliyor" | "cevaplandi" | "bitti"
+    //   - zaman:           timestamp  (required, immutable) - Sunucu zamanı
+    //   - caller_name:     string     (required, immutable, max 100) - Arayan adı
+    //   - caller_uid:      string     (required, immutable) - Arayan kullanıcının UID'si
+    //
+    // Collection: venues
+    // Document ID: {venueId} (UUID)
+    // Fields:
+    //   - id:                  string   (required, immutable) - UUID
+    //   - name:                string   (required, max 200, immutable) - Mekan adı
+    //   - category:            string   (required, immutable) - Kategori
+    //   - address:             string   (required, max 500, immutable) - Adres
+    //   - latitude:            number   (required, immutable) - Enlem
+    //   - longitude:           number   (required, immutable) - Boylam
+    //   - description:         string   (required, max 2000, immutable) - Açıklama
+    //   - accessibilityScore:  number   (required, 0-100) - Erişilebilirlik skoru (yorumla güncellenir)
+    //   - accessibilityLevel:  string   (required, max 50) - Seviye etiketi
+    //   - features:            list     (required, max 20 items) - Erişilebilirlik özellikleri
+    //   - images:              list     (required, max 10 items) - Görsel URL'leri
+    //   - comments:            list     (required) - Kullanıcı yorumları (embedded)
+    //   - addedBy:             string   (required, immutable) - Ekleyen kullanıcının UID'si
+    //   - averageRating:       number   (required, 0.0-5.0) - Ortalama puan
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Kullanıcının oturum açıp açmadığını kontrol eder
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Belge ID'si == auth UID (sahiplik)
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // Oluşturmada: uid alanı kendi UID'si ile eşleşmeli
+    function uidMatchesAuth() {
+      return request.resource.data.uid == request.auth.uid;
+    }
+
+    // Güncellemede: uid alanı değiştirilmemeli
+    function uidNotModified() {
+      return !('uid' in request.resource.data) ||
+             request.resource.data.uid == resource.data.uid;
+    }
+
+    // Zorunlu alanların hepsi mevcut mu?
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Yalnızca izin verilen alanlar mı var?
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Değişmez (immutable) alanlar güncellenmedi mi?
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    // --- USERS ---
+    function isValidUserData() {
+      let d = request.resource.data;
+      return hasOnlyAllowedFields([
+               'uid', 'fullName', 'email', 'userType', 'isVolunteer',
+               'touristInterests', 'volunteerSkills', 'accessibilityPrefs', 'fcmToken'
+             ]) &&
+             d.uid is string && d.uid.size() > 0 && d.uid.size() <= 128 &&
+             d.userType is string &&
+             d.userType in ['Turist', 'Sakin', 'Özel Gereksinimli'] &&
+             d.isVolunteer is bool &&
+             (!('fullName' in d) || (d.fullName is string && d.fullName.size() <= 100)) &&
+             (!('email' in d) || (d.email is string && d.email.size() <= 254)) &&
+             (!('touristInterests' in d) || (d.touristInterests is list && d.touristInterests.size() <= 20)) &&
+             (!('volunteerSkills' in d) || (d.volunteerSkills is list && d.volunteerSkills.size() <= 20)) &&
+             (!('accessibilityPrefs' in d) || (d.accessibilityPrefs is list && d.accessibilityPrefs.size() <= 20)) &&
+             (!('fcmToken' in d) || (d.fcmToken is string && d.fcmToken.size() <= 200));
+    }
+
+    // --- CAGRILAR: Yeni çağrı oluşturma ---
+    function isValidNewCagri() {
+      let d = request.resource.data;
+      return hasRequiredFields(['callId', 'kanal_adi', 'cagri_durumu', 'zaman', 'caller_name', 'caller_uid']) &&
+             hasOnlyAllowedFields(['callId', 'kanal_adi', 'cagri_durumu', 'zaman', 'caller_name', 'caller_uid']) &&
+             d.callId is string && d.callId.size() > 0 && d.callId.size() <= 128 &&
+             d.kanal_adi is string && d.kanal_adi.size() > 0 && d.kanal_adi.size() <= 128 &&
+             d.cagri_durumu == 'bekliyor' &&
+             d.zaman is timestamp &&
+             d.caller_name is string && d.caller_name.size() > 0 && d.caller_name.size() <= 100 &&
+             d.caller_uid is string && d.caller_uid == request.auth.uid;
+    }
+
+    // --- CAGRILAR: Durum güncellemesi ---
+    // Sadece cagri_durumu değişebilir; diğer tüm alanlar kilitli.
+    function isValidCagriStatusUpdate() {
+      let d = request.resource.data;
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cagri_durumu']) &&
+             d.cagri_durumu is string &&
+             d.cagri_durumu in ['bekliyor', 'cevaplandi', 'bitti'];
+    }
+
+    // --- VENUES: Yeni mekan oluşturma ---
+    function isValidNewVenue() {
+      let d = request.resource.data;
+      return hasRequiredFields([
+               'id', 'name', 'category', 'address', 'latitude', 'longitude',
+               'description', 'accessibilityScore', 'accessibilityLevel',
+               'features', 'images', 'comments', 'addedBy', 'averageRating'
+             ]) &&
+             hasOnlyAllowedFields([
+               'id', 'name', 'category', 'address', 'latitude', 'longitude',
+               'description', 'accessibilityScore', 'accessibilityLevel',
+               'features', 'images', 'comments', 'addedBy', 'averageRating'
+             ]) &&
+             d.id is string && d.id.size() > 0 && d.id.size() <= 128 &&
+             d.name is string && d.name.size() > 0 && d.name.size() <= 200 &&
+             d.category is string &&
+             d.category in ['Park', 'Alışveriş', 'Tarihi Yer', 'Kamu Binası', 'Sosyal Alan', 'Doğa'] &&
+             d.address is string && d.address.size() > 0 && d.address.size() <= 500 &&
+             d.latitude is number && d.latitude >= -90.0 && d.latitude <= 90.0 &&
+             d.longitude is number && d.longitude >= -180.0 && d.longitude <= 180.0 &&
+             d.description is string && d.description.size() <= 2000 &&
+             d.accessibilityScore is number && d.accessibilityScore >= 0 && d.accessibilityScore <= 100 &&
+             d.accessibilityLevel is string && d.accessibilityLevel.size() <= 50 &&
+             d.features is list && d.features.size() <= 20 &&
+             d.images is list && d.images.size() <= 10 &&
+             d.comments is list &&
+             d.addedBy is string && d.addedBy == request.auth.uid &&
+             d.averageRating is number && d.averageRating >= 0.0 && d.averageRating <= 5.0;
+    }
+
+    // --- VENUES: Yorum + puan güncelleme ---
+    // Çekirdek bilgiler (id, name, category, address, konum, description, addedBy) değişemez.
+    // Yalnızca yorum sisteminin güncellediği alanlar (comments, averageRating, features,
+    // accessibilityScore, accessibilityLevel, images) değişebilir.
+    function isValidVenueUpdate() {
+      let d = request.resource.data;
+      return areImmutableFieldsUnchanged([
+               'id', 'name', 'category', 'address',
+               'latitude', 'longitude', 'description', 'addedBy'
+             ]) &&
+             d.averageRating is number && d.averageRating >= 0.0 && d.averageRating <= 5.0 &&
+             d.accessibilityScore is number && d.accessibilityScore >= 0 && d.accessibilityScore <= 100 &&
+             d.accessibilityLevel is string && d.accessibilityLevel.size() <= 50 &&
+             d.features is list && d.features.size() <= 20 &&
+             d.comments is list &&
+             d.images is list && d.images.size() <= 10;
+    }
+
+    // ===============================================================
+    // Koleksiyon Kuralları
+    // ===============================================================
+
+    // --- USERS ---
+    // Kullanıcı yalnızca kendi belgesini okuyup yazabilir (PII koruması).
+    // Başka hiçbir kullanıcı başkasının profilini göremez.
+    match /users/{userId} {
+      allow read:   if isOwner(userId);
+      allow create: if isOwner(userId) && uidMatchesAuth() && isValidUserData();
+      allow update: if isOwner(userId) && uidNotModified() && isValidUserData();
+      allow delete: if false;
+    }
+
+    // --- CAGRILAR ---
+    // create → Sadece giriş yapmış kullanıcı; caller_uid kendi UID'si olmalı.
+    // read   → Giriş yapmış herhangi bir kullanıcı (gönüllüler listeleyebilsin).
+    // update → Giriş yapmış herhangi bir kullanıcı; YALNIZCA cagri_durumu alanı değişebilir.
+    // delete → Asla (çağrı geçmişi korunmalı).
+    match /cagrilar/{cagriId} {
+      allow read:   if isAuthenticated();
+      allow create: if isAuthenticated() && isValidNewCagri();
+      allow update: if isAuthenticated() && isValidCagriStatusUpdate();
+      allow delete: if false;
+    }
+
+    // --- VENUES ---
+    // read   → Giriş yapmış herhangi bir kullanıcı.
+    // create → Giriş yapmış kullanıcı; addedBy kendi UID'si olmalı.
+    // update → Giriş yapmış kullanıcı; çekirdek alanlar kesinlikle değiştirilemez.
+    // delete → Asla (admin paneli eklenince güncellenecek).
+    match /venues/{venueId} {
+      allow read:   if isAuthenticated();
+      allow create: if isAuthenticated() && isValidNewVenue();
+      allow update: if isAuthenticated() && isValidVenueUpdate();
+      allow delete: if false;
+    }
+
+  }
+}
