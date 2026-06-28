@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import '../constants/app_colors.dart';
 import '../services/agora_token_service.dart';
+import '../services/analytics_service.dart';
 
 class CallScreen extends StatefulWidget {
   final bool isVolunteer;
@@ -25,12 +27,26 @@ class _CallScreenState extends State<CallScreen> {
   bool _isTokenLoading = true; // Token alınıyor mu?
   bool _isTokenError = false;  // Token alınamadı mı?
 
+  // --- Zaman aşımı (yalnızca ARAYAN tarafı) ---
+  Timer? _zamanAsimiTimer;     // Gönüllü gelmezse çağrıyı zaman aşımına uğratır
+  bool _zamanAsimiOldu = false; // Zaman aşımı ekranı gösteriliyor mu?
+  bool _cevaplandi = false;     // Bir gönüllü çağrıyı üstlendi/katıldı mı?
+
+  // Arayan, bu süre içinde gönüllü bulamazsa çağrı 'zaman_asimi' olur.
+  // CallKit zil süresi (30 sn) + kabul/komut gecikmesi için pay bırakılır.
+  static const Duration _zamanAsimiSuresi = Duration(seconds: 45);
+
   @override
   void initState() {
     super.initState();
     _isVideoMuted = widget.isVolunteer; // Gönüllü ise kamerası kapalı başlar
     initAgora();
     _cagriyiDinle();
+    // Zaman aşımı sayacı YALNIZCA arayan için başlar; gönüllü ekrana zaten
+    // çağrıyı üstlenmiş (cevaplandi) olarak gelir, beklemez.
+    if (!widget.isVolunteer) {
+      _zamanAsimiTimer = Timer(_zamanAsimiSuresi, _zamanAsimindaCagriyiSonlandir);
+    }
   }
 
   void _cagriyiDinle() {
@@ -41,23 +57,72 @@ class _CallScreenState extends State<CallScreen> {
         .listen((snapshot) {
       if (!snapshot.exists) {
         _cagriyiKapat();
-      } else {
-        var data = snapshot.data();
-        if (data != null && data['cagri_durumu'] == 'bitti') {
-          _cagriyiKapat();
-        }
+        return;
+      }
+      final data = snapshot.data();
+      final durum = data?['cagri_durumu'];
+      if (durum == 'cevaplandi') {
+        // Gönüllü çağrıyı üstlendi → zaman aşımı sayacını iptal et.
+        _cevaplandi = true;
+        _zamanAsimiTimer?.cancel();
+      } else if (durum == 'zaman_asimi') {
+        // İstemci sayacı ya da sunucu güvenlik ağı çağrıyı zaman aşımına uğrattı.
+        _zamanAsimiEkraniGoster();
+      } else if (durum == 'bitti') {
+        _cagriyiKapat();
       }
     });
+  }
+
+  /// Zaman aşımı sayacı dolduğunda çalışır (yalnızca arayan).
+  /// Transaction ile: çağrı HÂLÂ 'bekliyor' ise 'zaman_asimi' yapar. Tam o anda
+  /// bir gönüllü üstlenmişse (durum 'cevaplandi') hiçbir şey yapmaz → "tam zamanında
+  /// cevaplandı" senaryosunda görüşme bozulmaz. ([[02-API-Arka-Uc]] yarış mantığıyla aynı.)
+  Future<void> _zamanAsimindaCagriyiSonlandir() async {
+    if (_isPopping || _cevaplandi || _zamanAsimiOldu) return;
+    final callRef =
+        FirebaseFirestore.instance.collection('cagrilar').doc(widget.callId);
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final snap = await tx.get(callRef);
+        if (!snap.exists) return;
+        final durum = (snap.data() as Map<String, dynamic>)['cagri_durumu'];
+        if (durum != 'bekliyor') return; // Araya gönüllü girdi / iptal oldu → dokunma
+        tx.update(callRef, {'cagri_durumu': 'zaman_asimi'});
+      });
+      // 'zaman_asimi' yazıldıysa snapshot listener _zamanAsimiEkraniGoster'i tetikler.
+    } catch (e) {
+      debugPrint('Zaman aşımı güncelleme hatası: $e');
+    }
+  }
+
+  /// Zaman aşımı bilgilendirme ekranını gösterir (arayan görür).
+  void _zamanAsimiEkraniGoster() {
+    if (_zamanAsimiOldu || _isPopping) return;
+    _zamanAsimiTimer?.cancel();
+    // Analytics: zaman aşımı ekranını yalnızca arayan görür → tek sefer logla.
+    AnalyticsService.cagriZamanAsimi();
+    if (mounted) setState(() => _zamanAsimiOldu = true);
   }
 
   void _cagriyiKapat() {
     if (_isPopping) return;
     _isPopping = true;
+    _zamanAsimiTimer?.cancel();
 
-    // Firebase'de çağrıyı bitir
-    FirebaseFirestore.instance.collection('cagrilar').doc(widget.callId).update({
-      'cagri_durumu': 'bitti',
-    }).catchError((_) {});
+    // Zaman aşımı zaten TERMİNAL bir durum; tekrar 'bitti' yazmaya çalışma
+    // (güvenlik kuralı zaman_asimi→bitti geçişine izin vermez, gereksiz hata olur).
+    if (!_zamanAsimiOldu) {
+      FirebaseFirestore.instance.collection('cagrilar').doc(widget.callId).update({
+        'cagri_durumu': 'bitti',
+      }).catchError((_) {});
+
+      // Analytics: yalnızca arayan tarafta ve çağrı cevaplandıysa tek sefer
+      // logla → "tamamlanan çağrı oranı" payı (çift sayımı önlemek için).
+      if (!widget.isVolunteer && _cevaplandi) {
+        AnalyticsService.cagriTamamlandi();
+      }
+    }
 
     if (mounted) {
       Navigator.pop(context);
@@ -110,6 +175,9 @@ class _CallScreenState extends State<CallScreen> {
         },
         onUserJoined: (RtcConnection connection, int remoteUid, int elapsed) {
           debugPrint("Karşı taraf odaya katıldı: $remoteUid");
+          // Karşı taraf katıldı = çağrı kesin cevaplandı → zaman aşımını iptal et.
+          _cevaplandi = true;
+          _zamanAsimiTimer?.cancel();
           setState(() {
             _remoteUid = remoteUid;
           });
@@ -153,6 +221,7 @@ class _CallScreenState extends State<CallScreen> {
   // Sayfa kapanınca motoru durdur
   @override
   void dispose() {
+    _zamanAsimiTimer?.cancel();
     _cagriAboneligi?.cancel();
     _engine.leaveChannel();
     _engine.release();
@@ -209,6 +278,64 @@ class _CallScreenState extends State<CallScreen> {
                 child: const Text('Geri Dön'),
               ),
             ],
+          ),
+        ),
+      );
+    }
+
+    // Zaman aşımı: uygun gönüllü bulunamadı ekranı (yalnızca arayan görür)
+    if (_zamanAsimiOldu) {
+      return Scaffold(
+        backgroundColor: Colors.black,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.timer_off, color: Colors.amber, size: 72),
+                  const SizedBox(height: 24),
+                  Semantics(
+                    liveRegion: true, // ekran okuyucu mesajı anında seslendirsin
+                    child: const Text(
+                      'Şu anda uygun bir gönüllü bulunamadı',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Lütfen biraz sonra tekrar deneyin.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white70, fontSize: 15),
+                  ),
+                  const SizedBox(height: 32),
+                  Semantics(
+                    button: true,
+                    label: 'Tekrar Dene. Ana ekrana dön.',
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        // Ana ekrana dön; kullanıcı YARDIM İSTE ile yeni çağrı açabilir.
+                        if (mounted) Navigator.pop(context);
+                      },
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Tekrar Dene'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.primary,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
       );

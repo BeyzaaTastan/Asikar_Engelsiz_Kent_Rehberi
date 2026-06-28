@@ -11,8 +11,16 @@ import 'package:http/http.dart' as http;
 import 'package:asikar_engelsiz_kent_rehberi/screens/route_screen.dart';
 import '../services/map_search_service.dart';
 import '../services/settings_service.dart';
+import '../services/overpass_poi_service.dart';
+import '../services/foursquare_places_service.dart';
 import '../models/venue_model.dart';
+import '../models/osm_poi_model.dart';
 import '../providers/venue_providers.dart';
+import 'map/map_visuals.dart';
+import 'map/map_action_button.dart';
+import 'map/osm_poi_sheet.dart';
+import 'map/venue_sheet.dart';
+
 
 // Harita türü
 enum _MapType { defaultMap, satellite, terrain }
@@ -62,6 +70,17 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   // Yüklenen tüm venue'lar (yakın mekan bulmak için)
   List<VenueModel> _allVenues = [];
 
+  // ── OSM POI durumu ──────────────────────────────────────────────────────
+  final OverpassPoiService _overpassPoiService = OverpassPoiService();
+  final FoursquarePlacesService _foursquareService = FoursquarePlacesService();
+  List<OsmPoi> _osmPois = [];
+  OsmPoi? _selectedOsmPoi;
+  bool _isLoadingPois = false;
+  // ignore: prefer_final_fields — set'in içeriği .add()/.remove() ile değiştiriliyor
+  Set<String> _selectedPoiCategories = {};
+  double _currentZoom = 14.0;
+
+
   _MapType _mapType = _MapType.defaultMap;
   bool _showTransit    = false;
   bool _showCycling    = false;
@@ -84,6 +103,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   @override
   void dispose() {
     _searchService.dispose();
+    _overpassPoiService.dispose();
+    _foursquareService.dispose();
     _searchController.dispose();
     _sheetController.dispose();
     super.dispose();
@@ -258,22 +279,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  /// Erişilebilirlik seviyesine göre marker rengi belirler
-  Color _getMarkerColor(String accessibilityLevel) {
-    switch (accessibilityLevel) {
-      case 'Tam Erişilebilir':
-        return AppColors.tertiary;       // Yeşil
-      case 'Kısmi Erişilebilir':
-        return AppColors.secondary;      // Turkuaz
-      case 'Kısıtlı Erişilebilir':
-        return AppColors.warning;        // Turuncu
-      case 'Destek Gerekli':
-        return AppColors.danger;         // Kırmızı
-      default:
-        return AppColors.outline;
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     // Firestore'daki gerçek venue verilerini Riverpod ile izle
@@ -317,7 +322,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   setState(() => _isSearchActive = false);
                   return;
                 }
+                // OSM POI'ye tıklanıp tıklanmadığını kontrol et
+                final tappedPoi = _findTappedPoi(point);
+                if (tappedPoi != null) {
+                  _onOsmPoiTapped(tappedPoi);
+                  return;
+                }
                 _onMapTapped(point, _allVenues);
+              },
+              onMapEvent: (event) {
+                if (event is MapEventMoveEnd) {
+                  final zoom = event.camera.zoom;
+                  setState(() => _currentZoom = zoom);
+                  if (zoom >= 15) {
+                    _fetchPoisForVisibleArea(event.camera.visibleBounds);
+                  } else {
+                    setState(() => _osmPois = []);
+                  }
+                }
               },
             ),
             children: [
@@ -350,11 +372,90 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               // ── Erişilebilirlik node marker'ları (Overpass API) ──
               if (_accessibilityMarkers.isNotEmpty)
                 MarkerLayer(markers: _accessibilityMarkers),
+              // ── OSM POI Marker'ları (Overpass: kafe, eczane, market vb.) ──
+              if (_osmPois.isNotEmpty && _currentZoom >= 15)
+                MarkerLayer(
+                  markers: _osmPois.map((poi) {
+                    final iconData = MapVisuals.poiIcon(poi.amenityType);
+                    final color = MapVisuals.poiColor(poi.amenityType);
+                    final isSelected = _selectedOsmPoi?.uniqueKey == poi.uniqueKey;
+                    return Marker(
+                      point: LatLng(poi.latitude, poi.longitude),
+                      width: isSelected ? 160 : 130,
+                      height: isSelected ? 75 : 62,
+                      child: GestureDetector(
+                        onTap: () => _onOsmPoiTapped(poi),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // İsim etiketi
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: isSelected
+                                    ? color
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(6),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withValues(alpha: 0.15),
+                                    blurRadius: 4,
+                                    offset: const Offset(0, 1),
+                                  ),
+                                ],
+                                border: Border.all(
+                                  color: isSelected
+                                      ? color
+                                      : Colors.grey.shade300,
+                                  width: 0.5,
+                                ),
+                              ),
+                              child: Text(
+                                poi.name,
+                                style: TextStyle(
+                                  fontSize: isSelected ? 11 : 10,
+                                  fontWeight: FontWeight.w600,
+                                  color: isSelected
+                                      ? Colors.white
+                                      : AppColors.surface,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            // Kategori ikonu
+                            Container(
+                              width: isSelected ? 34 : 28,
+                              height: isSelected ? 34 : 28,
+                              decoration: BoxDecoration(
+                                color: color,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                    color: Colors.white, width: 2),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: color.withValues(alpha: 0.4),
+                                    blurRadius: 6,
+                                  ),
+                                ],
+                              ),
+                              child: Icon(iconData,
+                                  color: Colors.white,
+                                  size: isSelected ? 18 : 14),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
               // Firestore'daki gerçek venue'lar → Dinamik Marker'lar
               venuesAsync.when(
                 data: (venues) {
                   _allVenues = venues;
-                  final colorFn = _getMarkerColor;
+                  final colorFn = MapVisuals.accessibilityLevelColor;
                   return MarkerLayer(
                     markers: venues.map((venue) {
                       final color = colorFn(venue.accessibilityLevel);
@@ -531,6 +632,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             ),
           ),
 
+          // 2b. KATMAN: POI Kategori Filtresi (her zaman görünür — arama ve seçim modu dışında)
+          if (!_isSearchActive && !_isPlaceSelected)
+            Positioned(
+              top: 80,
+              left: 0,
+              right: 0,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: OverpassPoiService.quickFilterCategories.map((cat) {
+                    return _buildPoiCategoryChip(cat);
+                  }).toList(),
+                ),
+              ),
+            ),
+
           // 3. KATMAN: Arama Sonuçları
           if (_isSearchActive)
             Positioned(
@@ -612,8 +730,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
             ),
 
-          // 4c. Overpass yükleniyor göstergesi
-          if (_isLoadingOverpass)
+          // 4c. Yükleniyor göstergesi (Overpass veya POI)
+          if (_isLoadingOverpass || _isLoadingPois)
             Positioned(
               bottom: _isPlaceSelected ? 260 : 100,
               right: 70,
@@ -624,13 +742,16 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   borderRadius: BorderRadius.circular(20),
                   boxShadow: [BoxShadow(color: Colors.black12, blurRadius: 8)],
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    SizedBox(width: 14, height: 14,
+                    const SizedBox(width: 14, height: 14,
                       child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.primary)),
-                    SizedBox(width: 6),
-                    Text('OSM verisi yükleniyor...', style: TextStyle(fontSize: 11, color: AppColors.primary)),
+                    const SizedBox(width: 6),
+                    Text(
+                      _isLoadingPois ? 'Mekanlar yükleniyor...' : 'OSM verisi yükleniyor...',
+                      style: const TextStyle(fontSize: 11, color: AppColors.primary),
+                    ),
                   ],
                 ),
               ),
@@ -646,280 +767,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               snap: true,
               snapSizes: const [0.35, 0.55, 0.92],
               builder: (context, scrollController) {
-                return _selectedVenue != null
-                    ? _buildVenueSheet(scrollController, _selectedVenue!)
-                    : _buildUnknownPointSheet(scrollController);
+                if (_selectedVenue != null) {
+                  return VenueSheet(
+                    scrollController: scrollController,
+                    venue: _selectedVenue!,
+                    onClose: () => setState(() {
+                      _isPlaceSelected = false;
+                      _selectedVenue = null;
+                      _tappedPoint = null;
+                    }),
+                  );
+                } else if (_selectedOsmPoi != null) {
+                  return OsmPoiSheet(
+                    scrollController: scrollController,
+                    poi: _selectedOsmPoi!,
+                    onClose: () => setState(() {
+                      _isPlaceSelected = false;
+                      _selectedOsmPoi = null;
+                      _tappedPoint = null;
+                    }),
+                  );
+                } else {
+                  return _buildUnknownPointSheet(scrollController);
+                }
               },
             ),
-        ],
-      ),
-    );
-  }
-
-  // ─── Google Maps tarzı Venue sheet (DB mekanı) ───────────────────────────
-  Widget _buildVenueSheet(ScrollController sc, VenueModel venue) {
-    final levelColor = _getLevelColor(venue.accessibilityLevel);
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: ListView(
-        controller: sc,
-        padding: EdgeInsets.zero,
-        children: [
-          // Sürükleme kolu
-          Center(
-            child: Container(
-              margin: const EdgeInsets.symmetric(vertical: 10),
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(10),
-              ),
-            ),
-          ),
-
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Üst: isim + kapat butonu
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(venue.name,
-                          style: const TextStyle(
-                              fontSize: 22,
-                              fontWeight: FontWeight.bold,
-                              color: AppColors.primary)),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, size: 20),
-                      onPressed: () => setState(() {
-                        _isPlaceSelected = false;
-                        _selectedVenue = null;
-                        _tappedPoint = null;
-                      }),
-                    )
-                  ],
-                ),
-
-                // Kategori + Rating
-                Row(
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: levelColor.withValues(alpha: 0.15),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: Text(venue.category,
-                          style: TextStyle(
-                              color: levelColor,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600)),
-                    ),
-                    const SizedBox(width: 10),
-                    Icon(Icons.star_rounded, color: Colors.amber.shade500, size: 16),
-                    const SizedBox(width: 2),
-                    Text(
-                      venue.averageRating > 0
-                          ? venue.averageRating.toStringAsFixed(1)
-                          : 'Yeni',
-                      style: const TextStyle(
-                          fontWeight: FontWeight.bold, fontSize: 13),
-                    ),
-                    if (venue.comments.isNotEmpty) ...[
-                      const SizedBox(width: 4),
-                      Text('(${venue.comments.length} yorum)',
-                          style: TextStyle(
-                              color: Colors.grey.shade500, fontSize: 12)),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-
-                // Adres
-                Row(
-                  children: [
-                    Icon(Icons.location_on_outlined,
-                        size: 14, color: Colors.grey.shade500),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(venue.address,
-                          style: TextStyle(
-                              color: Colors.grey.shade600, fontSize: 12),
-                          maxLines: 2),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-
-                // Aksiyon butonları (Google Maps gibi)
-                Row(
-                  children: [
-                    _buildActionButton(
-                      icon: Icons.directions,
-                      label: 'Yol Tarifi',
-                      color: AppColors.primary,
-                      onTap: () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => RouteScreen(
-                            destinationName: venue.name,
-                            destinationLocation:
-                                LatLng(venue.latitude, venue.longitude),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    _buildActionButton(
-                      icon: Icons.bookmark_border_rounded,
-                      label: 'Kaydet',
-                      color: Colors.grey.shade700,
-                      onTap: () => ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Kaydedildi!')),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    _buildActionButton(
-                      icon: Icons.share_outlined,
-                      label: 'Paylaş',
-                      color: Colors.grey.shade700,
-                      onTap: () {},
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 20),
-
-                // Erişilebilirlik skoru göstergesi
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: levelColor.withValues(alpha: 0.06),
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                        color: levelColor.withValues(alpha: 0.2)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.accessibility_new,
-                          color: levelColor, size: 28),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(venue.accessibilityLevel,
-                                style: TextStyle(
-                                    color: levelColor,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14)),
-                            Text('Erişilebilirlik Skoru: %${venue.accessibilityScore}',
-                                style: TextStyle(
-                                    color: Colors.grey.shade500,
-                                    fontSize: 12)),
-                          ],
-                        ),
-                      ),
-                      SizedBox(
-                        width: 48, height: 48,
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            CircularProgressIndicator(
-                              value: venue.accessibilityScore / 100,
-                              color: levelColor,
-                              backgroundColor:
-                                  levelColor.withValues(alpha: 0.15),
-                              strokeWidth: 5,
-                            ),
-                            Text('${venue.accessibilityScore}',
-                                style: TextStyle(
-                                    color: levelColor,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // Özellikler
-                if (venue.features.isNotEmpty) ...[
-                  const Text('Erişilebilirlik Özellikleri',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                          color: AppColors.primary)),
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 6,
-                    children: venue.features.map((f) {
-                      return Chip(
-                        label: Text(f,
-                            style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.w600)),
-                        avatar: const Icon(Icons.check_circle,
-                            size: 14, color: AppColors.tertiary),
-                        backgroundColor: AppColors.lightSurface,
-                        materialTapTargetSize:
-                            MaterialTapTargetSize.shrinkWrap,
-                        padding: EdgeInsets.zero,
-                        visualDensity: VisualDensity.compact,
-                      );
-                    }).toList(),
-                  ),
-                  const SizedBox(height: 16),
-                ],
-
-                // Açıklama
-                if (venue.description.isNotEmpty) ...[
-                  const Text('Hakkında',
-                      style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14,
-                          color: AppColors.primary)),
-                  const SizedBox(height: 6),
-                  Text(venue.description,
-                      style: TextStyle(
-                          color: Colors.grey.shade700,
-                          fontSize: 13,
-                          height: 1.5)),
-                  const SizedBox(height: 16),
-                ],
-
-                // Yorumlar
-                if (venue.comments.isNotEmpty) ...[
-                  Row(
-                    children: [
-                      const Text('Yorumlar',
-                          style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                              color: AppColors.primary)),
-                      const Spacer(),
-                      Text('${venue.comments.length} yorum',
-                          style: TextStyle(
-                              color: Colors.grey.shade500, fontSize: 12)),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  ...venue.comments.take(3).map((c) => _buildCommentTile(c)),
-                ],
-
-                const SizedBox(height: 24),
-              ],
-            ),
-          ),
         ],
       ),
     );
@@ -985,7 +857,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           const SizedBox(height: 16),
           Row(
             children: [
-              _buildActionButton(
+              MapActionButton(
                 icon: Icons.directions,
                 label: 'Yol Tarifi',
                 color: AppColors.primary,
@@ -1007,113 +879,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ],
       ),
     );
-  }
-
-  // ─── Aksiyon butonu (Yol Tarifi / Kaydet / Paylaş) ────────────────────────
-  Widget _buildActionButton({
-    required IconData icon,
-    required String label,
-    required Color color,
-    VoidCallback? onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Column(
-        children: [
-          Container(
-            width: 52, height: 52,
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(height: 4),
-          Text(label,
-              style: TextStyle(
-                  color: color,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
-
-  // ─── Yorum kutucuğu ────────────────────────────────────────────────────────
-  Widget _buildCommentTile(CommentModel c) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: AppColors.lightSurface,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 14,
-                backgroundColor: AppColors.primary.withValues(alpha: 0.15),
-                child: Text(
-                  c.userName.isNotEmpty ? c.userName[0].toUpperCase() : '?',
-                  style: const TextStyle(
-                      color: AppColors.primary,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(c.userName,
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w600, fontSize: 12)),
-                    Row(
-                      children: List.generate(
-                        5,
-                        (i) => Icon(
-                          i < c.rating.round()
-                              ? Icons.star_rounded
-                              : Icons.star_outline_rounded,
-                          size: 12,
-                          color: Colors.amber,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 6),
-          Text(c.content,
-              style: TextStyle(
-                  color: Colors.grey.shade700,
-                  fontSize: 12,
-                  height: 1.4)),
-        ],
-      ),
-    );
-  }
-
-  Color _getLevelColor(String level) {
-    switch (level) {
-      case 'Tam Erişilebilir':
-        return AppColors.tertiary;
-      case 'Kısmi Erişilebilir':
-        return AppColors.secondary;
-      case 'Kısıtlı Erişilebilir':
-        return AppColors.warning;
-      case 'Destek Gerekli':
-        return AppColors.danger;
-      default:
-        return AppColors.outline;
-    }
   }
 
   Widget _buildFilterChip(String label, IconData icon) {
@@ -1232,7 +997,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           return _buildSearchItem(
                             item['title'],
                             item['subtitle'],
-                            _getIconForType(item['type']),
+                            MapVisuals.searchResultTypeIcon(item['type']),
                             _isSearchFieldEmpty,
                             item['lat'],
                             item['lon'],
@@ -1297,21 +1062,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         }
       },
     );
-  }
-
-  IconData _getIconForType(String type) {
-    switch (type) {
-      case 'recent':
-        return Icons.history;
-      case 'park':
-        return Icons.park;
-      case 'museum':
-        return Icons.museum;
-      case 'place':
-        return Icons.location_on;
-      default:
-        return Icons.place;
-    }
   }
 
   // ─── Temel karo URL'si (harita türüne göre) ──────────────────────────────
@@ -1787,5 +1537,180 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       ),
     );
   }
-}
 
+  // ─── Overpass + Foursquare hibrit POI çekme ───────────────────────────────
+  void _fetchPoisForVisibleArea(LatLngBounds bounds) {
+    final center = bounds.center;
+
+    // Bounding box köşegen yarıçapını metre cinsinden hesapla (Foursquare için)
+    final diagonalMeters = const Distance().as(
+      LengthUnit.Meter,
+      bounds.southWest,
+      bounds.northEast,
+    );
+    final radiusMeters = (diagonalMeters / 2).round().clamp(300, 3000);
+
+    // Yükleniyor göster
+    if (mounted) setState(() => _isLoadingPois = true);
+
+    // Overpass: debounce ile (küçük haritalar + yollar için)
+    _overpassPoiService.debouncedFetch(
+      bounds: bounds,
+      selectedCategories: _selectedPoiCategories,
+      onResult: (overpassPois) {
+        if (!mounted) return;
+        // Foursquare zaten çekildiyse birleştir
+        final merged = MapVisuals.mergePois(_osmPois, overpassPois);
+        setState(() => _osmPois = merged);
+      },
+      onLoadingChanged: (_) {}, // Foursquare ile ortak loading kullanıyoruz
+    );
+
+    // Foursquare: güncel iş yeri verisi için (debounce ayrı, paralel çalışır)
+    _foursquareService.debouncedFetch(
+      centerLat: center.latitude,
+      centerLon: center.longitude,
+      selectedCategories: _selectedPoiCategories,
+      radiusMeters: radiusMeters,
+      onResult: (fsqPois) {
+        if (!mounted) return;
+        // Overpass ile birleştir, Foursquare öncelikli
+        final merged = MapVisuals.mergePois(fsqPois, _osmPois);
+        setState(() {
+          _osmPois = merged;
+          _isLoadingPois = false;
+        });
+      },
+      onLoadingChanged: (loading) {
+        if (mounted && loading) setState(() => _isLoadingPois = true);
+      },
+    );
+  }
+
+  // ─── OSM POI: Tıklanan POI'yi bul (yakınlık kontrolü) ────────────────────
+  OsmPoi? _findTappedPoi(LatLng point) {
+    if (_osmPois.isEmpty) return null;
+    OsmPoi? nearest;
+    double minDist = double.infinity;
+    for (final poi in _osmPois) {
+      final d = const Distance().as(
+        LengthUnit.Meter,
+        point,
+        LatLng(poi.latitude, poi.longitude),
+      );
+      if (d < minDist) {
+        minDist = d;
+        nearest = poi;
+      }
+    }
+    // 50m yakınlık eşiği
+    if (nearest != null && minDist < 50) return nearest;
+    return null;
+  }
+
+  // ─── OSM POI: Tıklama handler ────────────────────────────────────────────
+  void _onOsmPoiTapped(OsmPoi poi) {
+    setState(() {
+      _isSearchActive = false;
+      _isPlaceSelected = true;
+      _selectedVenue = null;
+      _selectedOsmPoi = poi;
+      _tappedPoint = LatLng(poi.latitude, poi.longitude);
+      _tappedAddress = poi.address ?? '';
+    });
+    _mapController.move(LatLng(poi.latitude, poi.longitude), 16.0);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_sheetController.isAttached) {
+        _sheetController.animateTo(0.45,
+            duration: const Duration(milliseconds: 300),
+            curve: Curves.easeOut);
+      }
+    });
+  }
+
+  // ─── POI Kategori Filtre Chip'i ──────────────────────────────────────────
+  Widget _buildPoiCategoryChip(String category) {
+    final isSelected = _selectedPoiCategories.contains(category);
+    final iconData = MapVisuals.poiIcon(
+      OverpassPoiService.categoryFilters.entries
+          .firstWhere((e) => e.key == category,
+              orElse: () => const MapEntry('Mekan', ''))
+          .key
+          .toLowerCase()
+          .replaceAll(' ', '_'),
+    );
+    // Daha anlamlı ikon eşleştirmesi
+    IconData chipIcon;
+    switch (category) {
+      case 'Kafe':       chipIcon = Icons.coffee; break;
+      case 'Restoran':   chipIcon = Icons.restaurant; break;
+      case 'Eczane':     chipIcon = Icons.local_pharmacy; break;
+      case 'Market':     chipIcon = Icons.shopping_cart; break;
+      case 'Hastane':    chipIcon = Icons.local_hospital; break;
+      case 'Otel':       chipIcon = Icons.hotel; break;
+      case 'Park':       chipIcon = Icons.park; break;
+      default:           chipIcon = iconData;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(right: 8.0),
+      child: InkWell(
+        onTap: () {
+          setState(() {
+            if (isSelected) {
+              _selectedPoiCategories.remove(category);
+            } else {
+              _selectedPoiCategories.add(category);
+            }
+          });
+          // Kategori değiştiğinde cache'i temizle ve yeniden çek
+          _overpassPoiService.clearCache();
+          // Zoom < 15 ise önce 15'e yaklaştır (POI'ler görünsün), sonra çek
+          if (_currentZoom < 15) {
+            _mapController.move(_mapController.camera.center, 15.0);
+            setState(() => _currentZoom = 15.0);
+          }
+          final bounds = _mapController.camera.visibleBounds;
+          _fetchPoisForVisibleArea(bounds);
+        },
+        borderRadius: BorderRadius.circular(30),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.primary : Colors.white,
+            borderRadius: BorderRadius.circular(30),
+            border: Border.all(
+              color: isSelected ? AppColors.primary : Colors.grey.shade300,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 4,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(chipIcon,
+                  size: 16,
+                  color: isSelected ? Colors.white : AppColors.outline),
+              const SizedBox(width: 6),
+              Text(
+                category,
+                style: TextStyle(
+                  color: isSelected ? Colors.white : AppColors.textDark,
+                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                  fontSize: 13,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+
+}

@@ -1,17 +1,89 @@
-# asikar_engelsiz_kent_rehberi
+# Aşikar Engelsiz Kent Rehberi
 
-A new Flutter project.
+Sakarya'ya odaklı, engelli bireyleri gönüllülerle buluşturan **Flutter + Firebase** mobil erişilebilirlik uygulaması. Bitirme projesi; düşük bütçe (ücretsiz/düşük katmanlar) hedefi.
 
-## Getting Started
+- **Özel Gereksinimli birey** → tek tuşla gönüllüye **görüntülü** bağlanır (Agora + FCM).
+- **Gönüllü** → çağrıyı push bildirimi ile alır, görüntülü destek verir.
+- **Sakin / Turist** → erişilebilirlik skorlu mekânları keşfeder, yorum yapar, haritada rota kullanır.
 
-This project is a starting point for a Flutter application.
+Paket: `asikar_engelsiz_kent_rehberi` · Versiyon: `1.0.0+1` · Hedef: Android + iOS (web ikincil)
 
-A few resources to get you started if this is your first Flutter project:
+---
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Teknoloji Yığını
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+| Alan | Teknoloji |
+|---|---|
+| Mobil | Flutter (Dart ^3.9.2) |
+| State | flutter_riverpod ^2.5.1 |
+| Auth | Firebase Authentication (e-posta + Google) |
+| Veri | Cloud Firestore (realtime) |
+| Push | Firebase Cloud Messaging (FCM) |
+| Backend | Firebase Cloud Functions (Node.js), bölge `europe-west3` |
+| Görüntülü | agora_rtc_engine ^6.5.4 |
+| Gelen çağrı UI | flutter_callkit_incoming ^3.0.0 |
+| Harita | flutter_map (OpenStreetMap) |
+| POI | Foursquare Places v3 + OSM Overpass (hibrit) |
+| Arama / Rota | Nominatim (arama) + OSRM (yol tarifi) |
+| Konum | geolocator ^14.0.2 |
+
+---
+
+## Kurulum
+
+```bash
+# 1. Bağımlılıklar
+flutter pub get
+
+# 2. Ortam değişkenleri — repoya DAHİL DEĞİL, elle oluştur:
+#    .env            → AGORA_APP_ID, FOURSQUARE_API_KEY
+#    functions/.env  → AGORA_APP_ID, AGORA_APP_CERTIFICATE  (sertifika YALNIZCA burada)
+
+# 3. (gerekirse) Firebase yapılandırması
+flutterfire configure --project=asikar-engelsiz-kent-rehberi
+
+# 4. Çalıştır
+flutter run
+```
+
+> ⚠️ Agora **App Certificate** asla Flutter tarafına konmaz; token yalnızca `generateAgoraToken` Cloud Function'ında üretilir.
+
+---
+
+## Komutlar
+
+```bash
+flutter analyze                 # lint — commit/PR öncesi ZORUNLU
+flutter test                    # testler
+flutter build appbundle         # Android yayın (Play Store)
+flutter build apk               # Android APK
+
+npx firebase-tools deploy --only firestore:rules   # kural deploy — DİKKATLİ
+npx firebase-tools deploy --only functions         # Cloud Functions
+npx firebase-tools functions:log                   # canlı log
+```
+
+---
+
+## Mimari (özet)
+
+Sunucusuz (serverless) + BaaS. Kendi sunucumuz yok; client çoğunlukla doğrudan Firestore'a yazar ve **tek güvenlik sınırı `firestore.rules`'tur.** Backend yalnızca 2 iş yapar:
+
+1. `cagriBildirimiGonder` — Firestore trigger; `cagri_durumu == 'bekliyor'` olunca FCM `volunteers` topic'ine push.
+2. `generateAgoraToken` — HTTPS Callable; `context.auth` kontrolü + 1 saatlik Agora token.
+
+**Çağrı durum makinesi:** `bekliyor → cevaplandi → bitti` (Firestore'da, realtime dinlenir).
+
+---
+
+## Dokümantasyon
+
+- **`proje_dokumantasyonu.md`** — projenin "ne ve nasıl"ı: klasör yapısı, servisler, ekranlar, veri modelleri, komutlar.
+- **`vault/`** (Obsidian) — mimari "neden"i: 13 katman notu + genel bakış, `[[wikilink]]` çapraz bağlarıyla beyin haritası. Merkez: `vault/00-Overview/Architecture-Overview.md`.
+- **`CLAUDE.md`** — AI asistanları için kod yazım kuralları ve konvansiyonlar.
+
+---
+
+## Lisans / Bağlam
+
+Bitirme projesi (Beyza Taştan) — Sakarya, Türkiye. Uygulama arayüzü Türkçe.

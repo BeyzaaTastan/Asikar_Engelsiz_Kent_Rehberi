@@ -8,6 +8,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../main.dart';
 import '../screens/call_screen.dart';
+import 'analytics_service.dart';
 
 // 🛑 ÇOK ÖNEMLİ: Bu fonksiyon sınıfın DIŞINDA olmak zorunda.
 // Çünkü uygulama kapalıyken bile çalışıp mesajları yakalaması gerekiyor.
@@ -21,7 +22,28 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
+/// CallKit `extra` / FCM payload'ından GEÇERLİ bir Agora kanal adını
+/// (= çağrı Firestore belge ID'si) çıkarır. Geçersizse (null/boş) `null` döner.
+///
+/// **Neden:** Eski kodda kanal yoksa `'aktif_cagri'` / `'yardim_kanali'` gibi
+/// paylaşılan sabitlere düşülüyordu. Eşzamanlı çağrılarda bu, iki ayrı çağrının
+/// aynı kanala bağlanmasına (yanlış görüşme) veya var olmayan bir belgeye yazılmaya
+/// yol açıyordu. Artık kanal yoksa çağrı kurulmaz/kabul edilmez — sessizce reddedilir.
+String? _validChannelName(Object? raw) {
+  if (raw is String) {
+    final trimmed = raw.trim();
+    if (trimmed.isNotEmpty) return trimmed;
+  }
+  return null;
+}
+
 void _showCallkitIncoming(String? callerName, String? channelName) async {
+  // Geçerli bir kanal yoksa çağrıyı hiç gösterme (bağlanılacak görüşme yok).
+  final channel = _validChannelName(channelName);
+  if (channel == null) {
+    debugPrint("⛔ Geçersiz çağrı sinyali: channel_name yok/boş, CallKit gösterilmiyor.");
+    return;
+  }
   final callId = const Uuid().v4();
   CallKitParams callKitParams = CallKitParams(
     id: callId,
@@ -39,7 +61,7 @@ void _showCallkitIncoming(String? callerName, String? channelName) async {
       subtitle: 'Cevapsız Çağrı',
       callbackText: 'Geri Ara',
     ),
-    extra: <String, dynamic>{'channel_name': channelName ?? 'yardim_kanali'},
+    extra: <String, dynamic>{'channel_name': channel},
     headers: <String, dynamic>{'apiKey': 'v1.0', 'platform': 'flutter'},
     android: const AndroidParams(
       isCustomNotification: true,
@@ -68,11 +90,76 @@ void _showCallkitIncoming(String? callerName, String? channelName) async {
   await FlutterCallkitIncoming.showCallkitIncoming(callKitParams);
 }
 
+/// Çağrı üstlenme transaction'ının başarısız olduğunu (yarış kaybı, çağrı yok/bitmiş)
+/// belirten dahili istisna. Beklenen bir akıştır; gerçek hatadan ayırmak için kullanılır.
+class _CagriUstlenmeException implements Exception {
+  final String message;
+  _CagriUstlenmeException(this.message);
+  @override
+  String toString() => '_CagriUstlenmeException: $message';
+}
+
 class NotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
   static String? pendingCallId;
   // Listener'ın birden fazla kez kurulmasını önler
   static bool _listenerInitialized = false;
+
+  /// Çağrıyı ATOMİK olarak üstlenir — "çağrı kapma yarışı"nın istemci tarafı kilidi.
+  ///
+  /// `volunteers` topic broadcast olduğu için aynı çağrıyı birden fazla gönüllü
+  /// "Cevapla" ile kabul edebilir. Bu metot `runTransaction` içinde önce çağrının
+  /// GÜNCEL durumunu okur ve YALNIZCA hâlâ `'bekliyor'` ise `'cevaplandi'` +
+  /// `volunteer_uid` yazar. İkinci gönüllü bu koşulu sağlayamaz → yarışı kaybeder,
+  /// [_CagriUstlenmeException] fırlatılır ve CallScreen'e YÖNLENDİRİLMEZ.
+  ///
+  /// Yönlendirme bilinçli olarak yalnızca transaction başarıyla commit edilirse
+  /// (= çağrıyı biz aldıysak) yapılır.
+  ///
+  /// Güvenlik: Bu istemci kilidi yarışı UX düzeyinde çözer; ASIL yetki kilidi
+  /// `firestore.rules` içindeki `isCagriClaim` geçişidir (yalnızca bekliyor→cevaplandi,
+  /// volunteer_uid == auth.uid). İstemci atlatılsa bile kural ikinci yazıyı reddeder.
+  /// İkisi birlikte tek-kazanan garantisini hem deneyim hem güvenlik katmanında verir.
+  static Future<void> _claimCallAndNavigate(String callId) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+    if (uid == null) {
+      debugPrint("⚠️ Çağrı üstlenilemedi: oturum açık değil.");
+      await FlutterCallkitIncoming.endAllCalls();
+      return;
+    }
+
+    final callRef = FirebaseFirestore.instance.collection('cagrilar').doc(callId);
+    try {
+      await FirebaseFirestore.instance.runTransaction((tx) async {
+        final snap = await tx.get(callRef);
+        if (!snap.exists) {
+          throw _CagriUstlenmeException('Çağrı bulunamadı: $callId');
+        }
+        final durum = (snap.data() as Map<String, dynamic>)['cagri_durumu'];
+        if (durum != 'bekliyor') {
+          // Başka gönüllü önce üstlenmiş veya çağrı bitmiş → yarışı kaybettik.
+          throw _CagriUstlenmeException('Çağrı zaten alınmış (durum: $durum)');
+        }
+        tx.update(callRef, {
+          'cagri_durumu': 'cevaplandi',
+          'volunteer_uid': uid,
+        });
+      });
+
+      // Transaction commit edildi → çağrıyı BİZ aldık. Şimdi görüşmeye git.
+      debugPrint("✅ Çağrı üstlenildi, görüşmeye yönlendiriliyor: $callId");
+      AnalyticsService.cagriCevaplandi();
+      _navigateToCallScreen(callId);
+    } on _CagriUstlenmeException catch (e) {
+      // Beklenen akış: yarış kaybedildi. Ekrana gitme, çalan CallKit'i kapat.
+      debugPrint("ℹ️ Çağrı üstlenilemedi (${e.message}). Yönlendirme iptal.");
+      await FlutterCallkitIncoming.endAllCalls();
+    } catch (e) {
+      // Gerçek hata (ağ, izin, kural reddi vb.) — yine güvenli tarafta kal.
+      debugPrint("Çağrı üstlenme transaction hatası: $e");
+      await FlutterCallkitIncoming.endAllCalls();
+    }
+  }
 
   /// CallScreen'e yönlendirmeyi dener. Navigator henüz hazır değilse
   /// 300ms aralıklarla [maxRetries] kez tekrar dener.
@@ -217,10 +304,13 @@ class NotificationService {
         final status = activeCall?['callStatus'];
         // Eğer çağrı "accepted" durumundaysa (kullanıcı dışarıdan cevapladı)
         if (status == 'accepted' || status == 'ACCEPTED') {
-          final channelName = activeCall?['extra']?['channel_name'] as String?;
-          final callId = channelName ?? 'aktif_cagri';
-          debugPrint("📞 Arka planda kabul edilmiş çağrı bulundu: $callId");
-          pendingCallId = callId;
+          final channelName = _validChannelName(activeCall?['extra']?['channel_name']);
+          if (channelName == null) {
+            debugPrint("⚠️ Aktif çağrıda geçerli channel_name yok; yönlendirme atlanıyor.");
+          } else {
+            debugPrint("📞 Arka planda kabul edilmiş çağrı bulundu: $channelName");
+            pendingCallId = channelName;
+          }
         }
       }
     } catch (e) {
@@ -237,19 +327,19 @@ class NotificationService {
           case Event.actionCallAccept:
             debugPrint("Çağrı CallKit üzerinden KABUL edildi!");
 
-            final String callId = (event.body != null && event.body['extra'] != null)
-                ? (event.body['extra']['channel_name'] ?? 'aktif_cagri')
-                : 'aktif_cagri';
+            // Kanal adı yalnızca event'ten okunur; paylaşılan sabite fallback YOK.
+            // Geçersizse bağlanma — aksi halde yanlış görüşmeye düşme riski olur.
+            final channelName = _validChannelName(event.body?['extra']?['channel_name']);
+            if (channelName == null) {
+              debugPrint("⛔ Kabul edilen çağrıda geçerli channel_name yok; bağlanılmıyor.");
+              FlutterCallkitIncoming.endAllCalls();
+              break;
+            }
 
-            // Santrale "Çağrıyı ben aldım" sinyali gönder
-            final uid = FirebaseAuth.instance.currentUser?.uid;
-            FirebaseFirestore.instance.collection('cagrilar').doc(callId).update({
-              'cagri_durumu': 'cevaplandi',
-              'volunteer_uid': uid ?? '',
-            }).catchError((e) => debugPrint("Firestore güncelleme hatası: $e"));
-
-            // Görüntülü konuşma ekranına git — navigator hazır olmasa bile retry ile dener
-            _navigateToCallScreen(callId);
+            // Çağrıyı ATOMİK olarak üstlen (çağrı kapma yarışı kilidi).
+            // Yönlendirme yalnızca transaction kazanılırsa _claimCallAndNavigate
+            // içinde yapılır; yarış kaybedilirse ekrana gidilmez.
+            _claimCallAndNavigate(channelName);
             break;
           case Event.actionCallDecline:
             debugPrint("Çağrı CallKit üzerinden REDDEDİLDİ!");

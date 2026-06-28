@@ -23,12 +23,21 @@ exports.cagriBildirimiGonder = functions.region('europe-west3').firestore
             return null;
         }
 
+        // Kanal adı = Agora kanalı = çağrı belge ID'si. Yoksa gönüllü bağlanacak
+        // bir görüşme bulamaz; paylaşılan bir sabite ('yardim_kanali') düşmek
+        // eşzamanlı çağrılarda yanlış görüşmeye yol açar. Bu yüzden bildirim atma.
+        const channelName = afterData.kanal_adi;
+        if (typeof channelName !== 'string' || channelName.length === 0) {
+            console.error("Çağrıda geçerli kanal_adi yok, bildirim gönderilmiyor:", context.params.cagriId);
+            return null;
+        }
+
         const message = {
             topic: "volunteers",
             data: {
                 type: 'call',
                 caller_name: afterData.caller_name || 'Aşikar Kullanıcısı',
-                channel_name: afterData.kanal_adi || 'yardim_kanali'
+                channel_name: channelName
             },
             android: {
                 priority: 'high',
@@ -53,6 +62,55 @@ exports.cagriBildirimiGonder = functions.region('europe-west3').firestore
     });
 
 // =============================================================================
+// Fonksiyon 1b: Çağrı Zaman Aşımı Temizleyici (güvenlik ağı)
+// Her dakika çalışır; uzun süredir 'bekliyor' durumunda kalan (arayanın uygulaması
+// kapanmış olabilir) terk edilmiş çağrıları 'zaman_asimi' yapar.
+//
+// Birincil zaman aşımı İSTEMCİ tarafındadır (CallScreen, 45 sn) — kullanıcı anında
+// "gönüllü bulunamadı" geri bildirimi alsın diye. Bu fonksiyon yalnızca arayan
+// uygulaması kapandığında ortada kalan çağrıları temizler; böylece gönüllüler
+// terk edilmiş çağrıları görmeye devam etmez.
+//
+// NOT: Bileşik index gerektirmemek için yalnızca 'bekliyor' eşitlik sorgusu yapılır,
+// zaman eşiği bellek içinde filtrelenir (tek şehir → bekleyen çağrı sayısı düşük).
+// =============================================================================
+const CAGRI_ZAMAN_ASIMI_MS = 90 * 1000; // İstemci sayacından (45sn) uzun: terk tespiti
+
+exports.cagriZamanAsimiTemizle = functions.region('europe-west3').pubsub
+    .schedule('every 1 minutes')
+    .onRun(async () => {
+        const db = admin.firestore();
+        const snap = await db.collection('cagrilar')
+            .where('cagri_durumu', '==', 'bekliyor')
+            .get();
+
+        if (snap.empty) {
+            console.log("Bekleyen çağrı yok, zaman aşımı kontrolü atlandı.");
+            return null;
+        }
+
+        const esikMs = Date.now() - CAGRI_ZAMAN_ASIMI_MS;
+        const batch = db.batch();
+        let sayac = 0;
+        snap.forEach((doc) => {
+            const zaman = doc.get('zaman'); // Firestore Timestamp
+            if (zaman && typeof zaman.toMillis === 'function' && zaman.toMillis() < esikMs) {
+                batch.update(doc.ref, { cagri_durumu: 'zaman_asimi' });
+                sayac++;
+            }
+        });
+
+        if (sayac === 0) {
+            console.log("Zaman aşımına uğrayan terk edilmiş çağrı yok.");
+            return null;
+        }
+
+        await batch.commit();
+        console.log(`${sayac} terk edilmiş çağrı zaman aşımına uğratıldı.`);
+        return null;
+    });
+
+// =============================================================================
 // Fonksiyon 2: Agora RTC Token Üreteci
 // Flutter uygulaması bu fonksiyonu çağırarak güvenli bir Agora token'ı alır.
 // App Certificate asla istemci tarafına gönderilmez; yalnızca bu fonksiyonda kullanılır.
@@ -64,6 +122,13 @@ exports.cagriBildirimiGonder = functions.region('europe-west3').firestore
 //   uid: 0,
 // })
 // =============================================================================
+// App Check zorlaması bir ortam bayrağıyla aç/kapatılır (functions/.env → APP_CHECK_ENFORCE).
+// GÜVENLİ KULLANIMA ALMA: önce istemci App Check ile deploy edilir ve Console'da
+// App Check metrikleri izlenir (zorlama KAPALI). Meşru trafiğin token taşıdığı
+// doğrulanınca APP_CHECK_ENFORCE=true yapılır. Bayrak set edilmezse zorlama yapılmaz
+// (mevcut davranış korunur, uygulama kırılmaz).
+const ENFORCE_APP_CHECK = process.env.APP_CHECK_ENFORCE === 'true';
+
 exports.generateAgoraToken = functions.region('europe-west3').https
     .onCall(async (data, context) => {
         // Yalnızca giriş yapmış kullanıcılar token alabilir
@@ -71,6 +136,16 @@ exports.generateAgoraToken = functions.region('europe-west3').https
             throw new functions.https.HttpsError(
                 'unauthenticated',
                 'Token oluşturmak için giriş yapmanız gerekiyor.'
+            );
+        }
+
+        // App Check: geçerli bir uygulama attestation token'ı yoksa reddet.
+        // context.app yalnızca istemci geçerli bir App Check token'ı gönderdiğinde dolar.
+        if (ENFORCE_APP_CHECK && !context.app) {
+            console.warn("App Check token'ı yok/geçersiz, token isteği reddedildi. UID:", context.auth.uid);
+            throw new functions.https.HttpsError(
+                'failed-precondition',
+                'Uygulama doğrulaması (App Check) gerekli.'
             );
         }
 

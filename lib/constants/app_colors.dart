@@ -46,4 +46,21 @@ class AppColors {
 
   /// İnce kenar ve ayırıcı rengi
   static const Color chipBorder = Color(0xFFC3C6D0);
+
+  // ── Harita POI kategori paleti ──────────────────────────────────────────
+  // OSM/Foursquare POI marker renkleri (bkz. lib/screens/map/map_visuals.dart).
+  static const Color poiCafe = Color(0xFF795548);       // Kahverengi
+  static const Color poiRestaurant = Color(0xFFE65100); // Turuncu
+  static const Color poiPharmacy = Color(0xFF2E7D32);   // Yeşil
+  static const Color poiShop = Color(0xFF1565C0);       // Mavi
+  static const Color poiHealth = Color(0xFFC62828);     // Kırmızı
+  static const Color poiBank = Color(0xFF283593);       // Lacivert
+  static const Color poiWorship = Color(0xFF00838F);    // Turkuaz
+  static const Color poiEducation = Color(0xFF6A1B9A);  // Mor
+  static const Color poiHotel = Color(0xFFAD1457);      // Pembe
+  static const Color poiPark = Color(0xFF388E3C);       // Koyu yeşil
+  static const Color poiFuel = Color(0xFF455A64);       // Gri
+  static const Color poiCulture = Color(0xFF5D4037);    // Koyu kahverengi
+  static const Color poiDefault = Color(0xFF546E7A);    // Varsayılan gri
+  static const Color poiTactile = Color(0xFF8E24AA);    // Mor — hissedilebilir yüzey rozeti
 }

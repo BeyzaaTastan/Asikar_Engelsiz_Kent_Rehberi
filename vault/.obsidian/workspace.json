@@ -1,0 +1,199 @@
+{
+  "main": {
+    "id": "f28eb942b896bebe",
+    "type": "split",
+    "children": [
+      {
+        "id": "cd81f1f5cb1793af",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "7381710338e7c71b",
+            "type": "leaf",
+            "state": {
+              "type": "graph",
+              "state": {},
+              "icon": "lucide-git-fork",
+              "title": "Grafik Görünümü"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "8f6713d628b3f002",
+    "type": "split",
+    "children": [
+      {
+        "id": "fdbb6193c6b05738",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4b010e7bf85b3232",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Dosya Gezgini"
+            }
+          },
+          {
+            "id": "b30b3497936c0bcb",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Ara"
+            }
+          },
+          {
+            "id": "4f783137d0d86c51",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {},
+              "icon": "lucide-bookmark",
+              "title": "Yer İmleri"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "7ff3018b8b8292bd",
+    "type": "split",
+    "children": [
+      {
+        "id": "25c258c03620d669",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "4d014ad50cfcb9e5",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Geri Bağlantılar"
+            }
+          },
+          {
+            "id": "56cd780ad1e5e3e1",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Giden bağlantılar"
+            }
+          },
+          {
+            "id": "132b07e4bb3a8309",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Etiketler"
+            }
+          },
+          {
+            "id": "c6ae04276db95c26",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Tüm özellikler"
+            }
+          },
+          {
+            "id": "a39546e70a7bb48f",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Anahat"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Hızlı geçişi aç": false,
+      "graph:Grafik görünümünü aç": false,
+      "canvas:Yeni tuval oluşturun": false,
+      "daily-notes:Bugünün Notunu Aç": false,
+      "templates:Şablon ekle": false,
+      "command-palette:Komut paletini aç": false,
+      "bases:Yeni taban oluştur": false
+    }
+  },
+  "active": "7381710338e7c71b",
+  "lastOpenFiles": [
+    "06-Security/09-Rate-Limiting.md.tmp.27168.acec915f3176",
+    "06-Security/09-Rate-Limiting.md.tmp.27168.f8baac948e6b",
+    "06-Security/08-Guvenlik.md.tmp.27168.2f6b76228007",
+    "06-Security/08-Guvenlik.md.tmp.27168.18899fff1650",
+    "06-Security/08-Guvenlik.md.tmp.27168.2a5abd07b837",
+    "06-Security/08-Guvenlik.md.tmp.27168.5f045c1c2554",
+    "05-Infrastructure/06-Bulut.md",
+    "01-Frontend/01-On-Yuz.md.tmp.35084.3ffddd8a5451",
+    "01-Frontend/01-On-Yuz.md.tmp.35084.7ceced92b213",
+    "06-Security/09-Rate-Limiting.md.tmp.35084.0541de5cccbc",
+    "06-Security/09-Rate-Limiting.md.tmp.35084.ecb6af2eeb47",
+    "06-Security/09-Rate-Limiting.md.tmp.35084.d6286453379b",
+    "2026-06-27.md",
+    "07-Performance/10-Cache-CDN.md",
+    "03-Data/03-Veritabani.md",
+    "08-Reliability/12-Loglama.md",
+    "00-Overview/PRD.md",
+    "00-Overview/Architecture-Overview.md"
+  ]
+}

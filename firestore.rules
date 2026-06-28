@@ -24,10 +24,13 @@ service cloud.firestore {
     // Fields:
     //   - callId:          string     (required, immutable) - UUID
     //   - kanal_adi:       string     (required, immutable) - Agora channel adı (UUID)
-    //   - cagri_durumu:    string     (required) - "bekliyor" | "cevaplandi" | "bitti"
+    //   - cagri_durumu:    string     (required) - "bekliyor" | "cevaplandi" | "bitti" | "zaman_asimi"
     //   - zaman:           timestamp  (required, immutable) - Sunucu zamanı
     //   - caller_name:     string     (required, immutable, max 100) - Arayan adı
     //   - caller_uid:      string     (required, immutable) - Arayan kullanıcının UID'si
+    //   - volunteer_uid:   string     (optional) - Çağrıyı üstlenen gönüllünün UID'si.
+    //                                  YOK iken oluşturulur; yalnızca 'bekliyor → cevaplandi'
+    //                                  geçişinde (isCagriClaim) tek seferlik yazılır.
     //
     // Collection: venues
     // Document ID: {venueId} (UUID)
@@ -125,13 +128,55 @@ service cloud.firestore {
              d.caller_uid is string && d.caller_uid == request.auth.uid;
     }
 
-    // --- CAGRILAR: Durum güncellemesi ---
-    // Sadece cagri_durumu değişebilir; diğer tüm alanlar kilitli.
-    function isValidCagriStatusUpdate() {
+    // --- CAGRILAR: Durum makinesi geçişleri ---
+    // Çağrı durum makinesi: bekliyor → cevaplandi → bitti. GERİ DÖNÜŞ YOK.
+    // "Çağrı kapma yarışı" tam olarak burada, güvenlik katmanında kilitlenir:
+    // istemci transaction'ı atlansa/manipüle edilse bile kural geçersiz geçişi reddeder.
+    // (bkz. vault/02-Backend/02-API-Arka-Uc.md ve vault/03-Data/03-Veritabani.md)
+
+    // bekliyor → cevaplandi : Bir gönüllü çağrıyı ÜSTLENİR.
+    // - Yalnızca mevcut durum 'bekliyor' iken geçerli → ikinci gönüllünün yazısı
+    //   (durum artık 'cevaplandi' olduğu için) reddedilir. Yarış kilidi budur.
+    // - Yalnızca cagri_durumu + volunteer_uid değişebilir.
+    // - volunteer_uid, yazan gönüllünün KENDİ UID'si olmalı (başkası adına üstlenilemez).
+    // - Arayan kendi çağrısını gönüllü olarak üstlenemez.
+    function isCagriClaim() {
       let d = request.resource.data;
-      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['cagri_durumu']) &&
-             d.cagri_durumu is string &&
-             d.cagri_durumu in ['bekliyor', 'cevaplandi', 'bitti'];
+      let prev = resource.data;
+      return prev.cagri_durumu == 'bekliyor' &&
+             d.cagri_durumu == 'cevaplandi' &&
+             d.diff(prev).affectedKeys().hasOnly(['cagri_durumu', 'volunteer_uid']) &&
+             d.volunteer_uid is string && d.volunteer_uid.size() > 0 && d.volunteer_uid.size() <= 128 &&
+             d.volunteer_uid == request.auth.uid &&
+             prev.caller_uid != request.auth.uid;
+    }
+
+    // (bekliyor | cevaplandi) → bitti : Görüşmeyi sonlandırma / iptal.
+    // - Yalnızca cagri_durumu değişebilir.
+    // - YALNIZCA çağrının katılımcıları bitirebilir: arayan (caller_uid) ya da
+    //   çağrıyı üstlenmiş gönüllü (volunteer_uid). Üçüncü bir kullanıcı bitiremez.
+    function isCagriComplete() {
+      let d = request.resource.data;
+      let prev = resource.data;
+      return d.cagri_durumu == 'bitti' &&
+             prev.cagri_durumu in ['bekliyor', 'cevaplandi'] &&
+             d.diff(prev).affectedKeys().hasOnly(['cagri_durumu']) &&
+             (request.auth.uid == prev.caller_uid ||
+              (('volunteer_uid' in prev) && request.auth.uid == prev.volunteer_uid));
+    }
+
+    // bekliyor → zaman_asimi : Gönüllü bulunamadığında çağrı zaman aşımına uğrar (TERMİNAL).
+    // - Yalnızca durum hâlâ 'bekliyor' iken; yalnızca cagri_durumu değişir.
+    // - YALNIZCA çağrıyı açan (caller_uid) tetikleyebilir (istemci sayacı).
+    // - Terk edilmiş çağrılar için sunucu (scheduled function) admin SDK ile yazar; admin
+    //   SDK kuralları atladığı için bu fonksiyon yalnızca istemci yolunu kısıtlar.
+    function isCagriTimeout() {
+      let d = request.resource.data;
+      let prev = resource.data;
+      return prev.cagri_durumu == 'bekliyor' &&
+             d.cagri_durumu == 'zaman_asimi' &&
+             d.diff(prev).affectedKeys().hasOnly(['cagri_durumu']) &&
+             request.auth.uid == prev.caller_uid;
     }
 
     // --- VENUES: Yeni mekan oluşturma ---
@@ -199,12 +244,16 @@ service cloud.firestore {
     // --- CAGRILAR ---
     // create → Sadece giriş yapmış kullanıcı; caller_uid kendi UID'si olmalı.
     // read   → Giriş yapmış herhangi bir kullanıcı (gönüllüler listeleyebilsin).
-    // update → Giriş yapmış herhangi bir kullanıcı; YALNIZCA cagri_durumu alanı değişebilir.
+    // update → Yalnızca geçerli durum makinesi geçişi:
+    //            • bekliyor → cevaplandi (gönüllü üstlenir, isCagriClaim) — YARIŞ KİLİDİ
+    //            • (bekliyor|cevaplandi) → bitti (katılımcı bitirir, isCagriComplete)
+    //            • bekliyor → zaman_asimi (arayan, gönüllü bulunamadı, isCagriTimeout)
+    //          Geri dönüş / üçüncü taraf müdahalesi / başkası adına üstlenme reddedilir.
     // delete → Asla (çağrı geçmişi korunmalı).
     match /cagrilar/{cagriId} {
       allow read:   if isAuthenticated();
       allow create: if isAuthenticated() && isValidNewCagri();
-      allow update: if isAuthenticated() && isValidCagriStatusUpdate();
+      allow update: if isAuthenticated() && (isCagriClaim() || isCagriComplete() || isCagriTimeout());
       allow delete: if false;
     }
 

@@ -12,6 +12,7 @@ import '../../constants/app_colors.dart';
 import '../../providers/settings_provider.dart';
 import '../call_screen.dart';
 import '../route_screen.dart';
+import '../../services/analytics_service.dart';
 
 class DisabledHomeScreen extends ConsumerStatefulWidget {
   const DisabledHomeScreen({super.key});
@@ -182,6 +183,9 @@ class _DisabledHomeScreenState extends ConsumerState<DisabledHomeScreen> {
                 'caller_name': currentUser?.displayName ?? 'Aşikar Kullanıcısı',
                 'caller_uid': currentUser?.uid ?? '',
               });
+
+              // Analytics: çağrı başlatıldı (PRD tamamlanan çağrı oranı paydası)
+              AnalyticsService.cagriBaslatildi();
 
               // 3. Kendi kameramızı açıp beklemeye başla
               if (!mounted) return;
