@@ -1,0 +1,8 @@
+name = "asikar-poi-worker"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# R2 bucket bağlama — POI tile JSON'ları burada durur (pois/x=../y=../data_0.json).
+[[r2_buckets]]
+binding = "POI_BUCKET"
+bucket_name = "asikar-poi"

@@ -4,8 +4,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../constants/app_colors.dart';
 import '../../models/osm_poi_model.dart';
-import '../route_screen.dart';
+import '../../router/app_router.dart';
 import 'map_action_button.dart';
+import 'map_attribution.dart';
 import 'map_visuals.dart';
 
 /// Harita üzerinde seçilen harici POI (Overpass/Foursquare) için Google Maps tarzı
@@ -158,15 +159,14 @@ class OsmPoiSheet extends StatelessWidget {
                       icon: Icons.directions,
                       label: 'Yol Tarifi',
                       color: AppColors.primary,
-                      onTap: () => Navigator.push(
+                      onTap: () => Navigator.pushNamed(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => RouteScreen(
-                            destinationName: poi.name,
-                            destinationLocation:
-                                LatLng(poi.latitude, poi.longitude),
-                          ),
-                        ),
+                        AppRoutes.routeScreen,
+                        arguments: {
+                          'destinationName': poi.name,
+                          'destinationLocation':
+                              LatLng(poi.latitude, poi.longitude),
+                        },
                       ),
                     ),
                     if (poi.phone != null) ...[
@@ -199,6 +199,10 @@ class OsmPoiSheet extends StatelessWidget {
 
                 // Erişilebilirlik özellikleri
                 _accessibilitySection(poi),
+
+                // Veri kaynağı atfı — POI kaynağına göre (FSQ → Powered by Foursquare,
+                // OSM → © OpenStreetMap katkıda bulunanlar). Lisans zorunlu.
+                SheetAttributionLine(isFoursquare: poi.isFoursquare),
 
                 const SizedBox(height: 24),
               ],

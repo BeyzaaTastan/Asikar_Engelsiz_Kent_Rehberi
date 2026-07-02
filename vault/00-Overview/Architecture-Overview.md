@@ -8,7 +8,9 @@ bağımlılıklar: [[Vision]], [[PRD]]
 # Architecture Overview
 
 ## Neden önemli
-Bu not, 13 katmanın birbirine nasıl bağlandığını ve hangisinin MVP'de "tam" hangisinin "stub" olduğunu tek ekranda gösterir. Atlanırsa düşük bütçede kritik olmayan bir katmana (örn. ölçekleme) emek harcanır, kritik olan (auth/güvenlik) eksik kalır.
+Bu not, 13 katmanın birbirine nasıl bağlandığını ve hangisinin şu an "tam" hangisinin "stub" olduğunu tek ekranda gösterir. Atlanırsa $0 maliyet disiplininde kritik olmayan bir katmana emek harcanır, kritik olan (auth/güvenlik) eksik kalır.
+
+> **Bağlam (2026-07-01, O12):** Proje **bitirme → canlı production** ve **tek şehir → Türkiye geneli (Sakarya pilotu)** kapsamına taşındı. Aşağıdaki öncelik tablosu bu geçişe göre okunmalı; "tek şehir olduğu için stub" gerekçeleri artık **pilot sonrası tetiğe** dönüştü (bkz. [[Vision]], [[11-Olcekleme]]).
 
 ## Karar (ne + NEDEN)
 
@@ -29,7 +31,7 @@ Bu not, 13 katmanın birbirine nasıl bağlandığını ve hangisinin MVP'de "ta
 
 > POI katmanı **hibrit**: Foursquare (güncel iş yeri) + Overpass (bedava + erişilebilirlik tag'leri) paralel çekilir, Foursquare-öncelikli birleştirilir. Detay: [[10-Cache-CDN]], [[01-On-Yuz]], [[03-Veritabani]].
 
-**Mimari tarz:** Sunucusuz (serverless) + BaaS. Kendi sunucumuz yok; Firebase yönetilen servisleri kullanılır. **Neden:** Düşük bütçe + tek geliştirici. Sunucu işletmek (VM, ölçekleme, yama) hem para hem zaman ister; BaaS bunların hepsini ücretsiz/düşük katmanda devralır.
+**Mimari tarz:** Sunucusuz (serverless) + BaaS. Kendi sunucumuz yok; Firebase yönetilen servisleri kullanılır. **Neden:** Kalıcı $0/düşük katman maliyet disiplini + küçük ekip. Sunucu işletmek (VM, ölçekleme, yama) hem para hem zaman ister; BaaS bunları devralır ve ulusal ölçeğe otomatik ölçeklenir → Türkiye geneli hedefiyle uyumlu.
 
 **Bölge:** `europe-west3` (Frankfurt) — Türkiye'ye en yakın düşük gecikmeli Google Cloud bölgesi, KVKK açısından AB içinde.
 
@@ -57,11 +59,11 @@ Bu not, 13 katmanın birbirine nasıl bağlandığını ve hangisinin MVP'de "ta
 | 8 | Güvenlik ([[08-Guvenlik]]) | ✅ Evet | Firestore rules + sır yönetimi MVP'de pazarlık dışı | **tam** |
 | 9 | Rate Limiting ([[09-Rate-Limiting]]) | 🟡 Kısmi | Foursquare debounce var; sunucu tarafı koruma eksik | **stub** |
 | 10 | Cache/CDN ([[10-Cache-CDN]]) | 🟡 Kısmi | POI cache + OSM tile cache var; bilinçli minimal | **stub** |
-| 11 | Ölçekleme ([[11-Olcekleme]]) | ❌ Hayır | Tek şehir, az kullanıcı; Firestore zaten otomatik ölçekler | **stub** |
+| 11 | Ölçekleme ([[11-Olcekleme]]) | 🟡 Kısmi | Firestore/Functions/Agora otomatik ölçekler; POI taban katmanı Türkiye geneli canlı. **Açık sınır:** FCM topic broadcast → Türkiye geneli açılırken şehir bazlı segmentasyon şart | **stub → pilot sonrası tam** |
 | 12 | Loglama ([[12-Loglama]]) | ✅ Evet | Crashlytics + Analytics funnel eklendi (*2026-06-28*); çağrı yaşam döngüsü ölçülüyor | **tam** (çekirdek gözlemlenebilirlik) |
 | 13 | Recovery ([[13-Recovery]]) | 🟡 Kısmi | Veri kaybı = itibar kaybı; ama tam DR pahalı | **stub** |
 
-**Özet:** MVP'de **tam** olanlar 1-2-3-4-6-8 (çekirdek) + 12 (gözlemlenebilirlik, *2026-06-28*). Geri kalanı bilinçli **stub** — düşük bütçede "yeterince iyi", sonra büyütülür.
+**Özet:** **Tam** olanlar 1-2-3-4-6-8 (çekirdek) + 12 (gözlemlenebilirlik, *2026-06-28*). Geri kalanı bilinçli **stub** — Sakarya pilotu için "yeterince iyi"; Türkiye geneli açılımında özellikle 11 (ölçekleme/segmentasyon) tam'a taşınır.
 
 ## MVP Kapsamı
 **VAR:** Çekirdek 6 katman tam, diğer 7 katman çalışır-stub.

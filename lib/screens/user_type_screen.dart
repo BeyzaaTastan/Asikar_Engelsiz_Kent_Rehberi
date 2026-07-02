@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'interests_screen.dart'; // Bir sonraki "İlgi Alanları" ekranımız
+import '../router/app_router.dart'; // Bir sonraki "İlgi Alanları" ekranımız
 
 class UserTypeScreen extends StatefulWidget {
   const UserTypeScreen({super.key});
@@ -158,12 +158,10 @@ class _UserTypeScreenState extends State<UserTypeScreen> {
                   onPressed: _selectedType == null
                       ? null
                       : () {
-                          Navigator.push(
+                          Navigator.pushNamed(
                             context,
-                            MaterialPageRoute(
-                              builder: (context) =>
-                                  InterestsScreen(userType: _selectedType!),
-                            ),
+                            AppRoutes.interests,
+                            arguments: {'userType': _selectedType!},
                           );
                         },
                   child: const Text(

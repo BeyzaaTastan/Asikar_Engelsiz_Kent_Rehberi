@@ -63,4 +63,33 @@ class AppColors {
   static const Color poiCulture = Color(0xFF5D4037);    // Koyu kahverengi
   static const Color poiDefault = Color(0xFF546E7A);    // Varsayılan gri
   static const Color poiTactile = Color(0xFF8E24AA);    // Mor — hissedilebilir yüzey rozeti
+
+  // ── Harita katman / overlay paleti ──────────────────────────────────────
+  // Erişilebilirlik katmanları + harita türü/overlay seçici (map_screen.dart).
+  static const Color mapSteps = Color(0xFFE53935);        // Kırmızı — merdiven
+  static const Color mapFootway = Color(0xFFFF8F00);      // Turuncu — yaya yolu / yürüyüş
+  static const Color mapWheelchair = Color(0xFF1E88E5);   // Mavi — tekerlekli sandalye
+  static const Color mapElevator = Color(0xFF00ACC1);     // Cyan — asansör
+  static const Color mapParking = Color(0xFF3949AB);      // İndigo — engelli otoparkı
+  // (hissedilebilir yüzey için poiTactile yeniden kullanılır)
+  static const Color mapTypeDefault = Color(0xFF4DB6AC);  // Varsayılan harita türü
+  static const Color mapTypeSatellite = Color(0xFF546E7A);// Uydu harita türü
+  static const Color mapTypeTerrain = Color(0xFF8D6E63);  // Arazi harita türü
+  static const Color mapTransit = Color(0xFF00897B);      // Toplu taşıma overlay
+  static const Color mapCycling = Color(0xFF43A047);      // Bisiklet overlay
+
+  // ── Rota modu paleti (route_screen.dart) ────────────────────────────────
+  static const Color routeWalk = Color(0xFF34A853);       // Yürüyüş
+  static const Color routeWheelchair = Color(0xFF1A73E8); // Tekerlekli sandalye
+  static const Color routeTransit = Color(0xFFFF6D00);    // Taşıt
+
+  // ── Geri bildirim / yardımcı ────────────────────────────────────────────
+  static const Color divider = Color(0xFFEEEEEE);         // İnce ayırıcı (Divider)
+  static const Color successDark = Color(0xFF1A4F00);     // Koyu yeşil — başarı rozeti arka planı
+  static const Color successLight = Color(0xFFADF688);    // Açık yeşil — başarı vurgusu
+  static const Color error = Color(0xFFBA1A1A);           // Material3 hata kırmızısı
+
+  // ── Yüksek kontrast erişilebilirlik teması (settings_provider.dart) ──────
+  static const Color hcYellow = Color(0xFFFFFF00);        // Parlak sarı — HC karanlık vurgu
+  static const Color hcNavy = Color(0xFF000080);          // Koyu lacivert — HC açık vurgu
 }

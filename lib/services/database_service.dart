@@ -37,7 +37,8 @@ class DatabaseService {
         //    doc(currentUser.uid) → Her kullanıcıya özel, benzersiz bir belge (document) oluşturur
         await _db.collection('users').doc(currentUser.uid).set(updatedUser.toJson());
 
-        debugPrint("Başarılı: Gerçek kullanıcı (${currentUser.email}) verisi kaydedildi!");
+        // KVKK: loglara kişisel veri (e-posta/UID) yazılmaz (bkz. vault/08-Reliability/12-Loglama.md).
+        debugPrint("Başarılı: Kullanıcı verisi Firestore'a kaydedildi.");
       } else {
         // 4. Eğer kullanıcı henüz giriş yapmadan formu doldurursa (edge case),
         //    eski yöntemle geçici ID üzerinden kaydet. Bu durum normalde oluşmamalı,

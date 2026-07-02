@@ -300,7 +300,7 @@ class VenueModel {
 - `≥ 25` → "Kısıtlı Erişilebilir"
 - `< 25` → "Destek Gerekli"
 
-**Puan Hesaplama Formülü (`_calculateScore`):**
+**Puan Hesaplama Formülü (`calculateAccessibilityScore` — saf/test edilebilir, `lib/services/accessibility_score.dart`, birim testi `test/unit/accessibility_score_test.dart`):**
 - Toplam olası özellik: 8 (Rampa, Asansör, Tuvalet, Otopark, Hissedilebilir Yüzey, Kabartma, Sesli, İşaret Dili)
 - `featurePoints = (features.length / 8) * 70` → Max 70 puan
 - `ratingPoints = (avgRating / 5.0) * 30` → Max 30 puan
@@ -887,12 +887,15 @@ flutterfire configure --project=asikar-engelsiz-kent-rehberi
 
 11. **Foursquare servisinde debounce:** API aşırı yüklenmesini önlemek için 800ms debounce ve basit koordinat+kategori bazlı cache kullanılır.
 
+12. **Çağrı tipine göre FCM yönlendirmesi (2026-07-02):** Çağrı `cagri_tipi` taşır (`CagriTipi.fiziksel`/`uzaktan` — `lib/constants/call_types.dart`). **Fiziksel** (yerinde yardım/şehir rehberliği) yalnızca aynı şehirdeki gönüllülere (`volunteers_<sehir>`), **uzaktan** (görüntülü) tüm gönüllülere (global `volunteers`) gider. Kullanıcı tipi çağrı ekranındaki bottom-sheet'ten seçer. `sehir` arayanın anlık GPS konumundan reverse-geocode ile çözülür (`city_lookup_service.dart`) ve topic-güvenli slug'a çevrilir (`city_slug.dart`, saf/testli). Gönüllü hem global hem kendi şehir topic'ine abone olur. `functions/index.js` + `firestore.rules` aynı slug regex'iyle doğrular. **Deploy gerekli:** functions + rules.
+
 ---
 
 ## 22. Proje Bağlamı
 
-- **Amaç:** Bitirme projesi (Beyza Taştan)
-- **Hedef şehir:** Sakarya, Türkiye
+- **Amaç:** Gerçek ürün / canlı production — engelli bireyler için erişilebilirlik + gönüllü destek platformu
+- **Yayılım:** Sakarya'da **pilot** → **Türkiye geneli** kullanıma açık
+- **Maliyet duruşu:** Altyapıda kalıcı **$0/düşük katman** hedefi (bilinçli tercih)
 - **Dil:** Uygulama arayüzü Türkçe, kod yorumları Türkçe/İngilizce karışık
 - **Hedef platformlar:** Android ve iOS (birincil), Web (ikincil)
 - **Uygulama adı:** Aşikar Engelsiz Kent Rehberi

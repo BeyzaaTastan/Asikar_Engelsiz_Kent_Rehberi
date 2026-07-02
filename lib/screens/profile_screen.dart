@@ -12,7 +12,7 @@ class ProfileScreen extends StatefulWidget {
 
 class _ProfileScreenState extends State<ProfileScreen> {
   // Renk sabitleri merkezi AppColors'tan alınıyor
-  static const Color errorColor = Color(0xFFBA1A1A);
+  static const Color errorColor = AppColors.error;
 
   // O an giriş yapmış olan Firebase kullanıcısını alıyoruz
   final User? currentUser = FirebaseAuth.instance.currentUser;

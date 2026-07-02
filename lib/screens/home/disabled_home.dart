@@ -9,10 +9,12 @@ import 'package:latlong2/latlong.dart';
 import '../../widgets/custom_home_widgets.dart';
 import '../../widgets/location_search_dialog.dart';
 import '../../constants/app_colors.dart';
+import '../../constants/call_types.dart';
 import '../../providers/settings_provider.dart';
 import '../call_screen.dart';
-import '../route_screen.dart';
+import '../../router/app_router.dart';
 import '../../services/analytics_service.dart';
+import '../../services/city_lookup_service.dart';
 
 class DisabledHomeScreen extends ConsumerStatefulWidget {
   const DisabledHomeScreen({super.key});
@@ -145,7 +147,7 @@ class _DisabledHomeScreenState extends ConsumerState<DisabledHomeScreen> {
   Widget _buildMassiveHelpButton() {
     return Semantics(
       button: true,
-      label: 'Acil Yardım İste. Görüntülü bir gönüllüye bağlan.', // Görme engelli biri tıkladığında cihaz bu cümleyi sesli okur
+      label: 'Yardım İste. Görüntülü destek mi yoksa yerinde yardım mı istediğinizi seçin.', // Görme engelli biri tıkladığında cihaz bu cümleyi sesli okur
       child: Container(
         width: 280,
         height: 280,
@@ -167,37 +169,12 @@ class _DisabledHomeScreenState extends ConsumerState<DisabledHomeScreen> {
             customBorder: const CircleBorder(),
             splashColor: Colors.white.withValues(alpha: 0.2),
             onTap: () async {
-              debugPrint("Santrale yardım çağrısı gönderiliyor...");
-
-              final String callId = const Uuid().v4();
-              final currentUser = FirebaseAuth.instance.currentUser;
-
-              // 1. SANTRALE (FIRESTORE) SİNYALİ GÖNDER!
-              // NOT: caller_uid alanı Firestore güvenlik kuralları tarafından zorunludur.
-              // Kural, bu alanın giriş yapan kullanıcının UID'si ile eşleşmesini doğrular.
-              await FirebaseFirestore.instance.collection('cagrilar').doc(callId).set({
-                'callId': callId,
-                'kanal_adi': callId,
-                'cagri_durumu': 'bekliyor',
-                'zaman': FieldValue.serverTimestamp(),
-                'caller_name': currentUser?.displayName ?? 'Aşikar Kullanıcısı',
-                'caller_uid': currentUser?.uid ?? '',
-              });
-
-              // Analytics: çağrı başlatıldı (PRD tamamlanan çağrı oranı paydası)
-              AnalyticsService.cagriBaslatildi();
-
-              // 3. Kendi kameramızı açıp beklemeye başla
-              if (!mounted) return;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => CallScreen(
-                    isVolunteer: false,
-                    callId: callId,
-                  ),
-                ),
-              );
+              // Kullanıcı çağrı tipini seçer: uzaktan (görüntülü) veya fiziksel (yerinde).
+              // Tip, çağrının hangi gönüllülere yönlendirileceğini belirler
+              // (bkz. vault/07-Performance/11-Olcekleme.md).
+              final tip = await _showCallTypeSheet();
+              if (tip == null || !mounted) return; // kullanıcı vazgeçti
+              await _startCall(tip);
             },
             // Semantics okuduğu için içindeki metinleri tekrar okumasını engelliyoruz
             child: ExcludeSemantics(
@@ -272,14 +249,13 @@ class _DisabledHomeScreenState extends ConsumerState<DisabledHomeScreen> {
             onTap: () async {
               if (isSet && locData != null) {
                 // Rotaya Git
-                Navigator.push(
+                Navigator.pushNamed(
                   context,
-                  MaterialPageRoute(
-                    builder: (context) => RouteScreen(
-                      destinationName: locData!['name'],
-                      destinationLocation: LatLng(locData['lat'], locData['lng']),
-                    ),
-                  ),
+                  AppRoutes.routeScreen,
+                  arguments: {
+                    'destinationName': locData['name'],
+                    'destinationLocation': LatLng(locData['lat'], locData['lng']),
+                  },
                 );
               } else {
                 // Ayarla
@@ -367,6 +343,195 @@ class _DisabledHomeScreenState extends ConsumerState<DisabledHomeScreen> {
         );
       }
     }
+  }
+
+  // --- ÇAĞRI TİPİ SEÇİMİ + BAŞLATMA ---
+
+  /// Kullanıcıya çağrı tipini sorar (uzaktan / fiziksel). Erişilebilir, büyük
+  /// dokunma hedefli iki seçenek. Kullanıcı vazgeçerse `null` döner.
+  Future<String?> _showCallTypeSheet() {
+    return showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.background,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Semantics(
+                  header: true,
+                  child: const Text(
+                    'Nasıl yardım istersiniz?',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                _buildCallTypeOption(
+                  sheetContext: sheetContext,
+                  type: CagriTipi.uzaktan,
+                  icon: Icons.video_call,
+                  title: 'Görüntülü Destek',
+                  subtitle:
+                      'Uzaktan görüntülü yardım. Her yerdeki gönüllüler yanıtlayabilir.',
+                  color: AppColors.primary,
+                ),
+                const SizedBox(height: 14),
+                _buildCallTypeOption(
+                  sheetContext: sheetContext,
+                  type: CagriTipi.fiziksel,
+                  icon: Icons.volunteer_activism,
+                  title: 'Yerinde Yardım',
+                  subtitle:
+                      'Bulunduğunuz yerde fiziksel yardım veya rehberlik. Yalnızca aynı şehirdeki gönüllülere ulaşır.',
+                  color: AppColors.secondary,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildCallTypeOption({
+    required BuildContext sheetContext,
+    required String type,
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+  }) {
+    return Semantics(
+      button: true,
+      label: '$title. $subtitle',
+      child: Material(
+        color: color,
+        borderRadius: BorderRadius.circular(16),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => Navigator.of(sheetContext).pop(type),
+          child: ExcludeSemantics(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Row(
+                children: [
+                  Icon(icon, color: Colors.white, size: 40),
+                  const SizedBox(width: 16),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          title,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          subtitle,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.9),
+                            fontSize: 13,
+                            height: 1.3,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Seçilen tiple çağrı belgesini oluşturur ve CallScreen'e yönlendirir.
+  ///
+  /// Fiziksel çağrıda, çağrı yalnızca aynı şehirdeki gönüllülere gitmeli →
+  /// arayanın ANLIK konumundan `sehir` slug'ı çözülür. Uzaktan çağrıda konum
+  /// gerekmez (hızlı yol). Şehir çözülemezse `sehir` yazılmaz; Cloud Function
+  /// global `volunteers`'a düşürür (çağrı kaybolmaz).
+  Future<void> _startCall(String cagriTipi) async {
+    final String callId = const Uuid().v4();
+    final currentUser = FirebaseAuth.instance.currentUser;
+
+    String? sehir;
+    if (cagriTipi == CagriTipi.fiziksel) {
+      _showResolvingDialog();
+      sehir = await CityLookupService.currentCitySlug();
+      if (mounted) Navigator.of(context, rootNavigator: true).pop();
+    }
+    if (!mounted) return;
+
+    // SANTRALE (FIRESTORE) SİNYALİ GÖNDER!
+    // NOT: caller_uid alanı Firestore güvenlik kuralları tarafından zorunludur.
+    // Kural, bu alanın giriş yapan kullanıcının UID'si ile eşleşmesini doğrular.
+    final Map<String, dynamic> data = {
+      'callId': callId,
+      'kanal_adi': callId,
+      'cagri_durumu': 'bekliyor',
+      'zaman': FieldValue.serverTimestamp(),
+      'caller_name': currentUser?.displayName ?? 'Aşikar Kullanıcısı',
+      'caller_uid': currentUser?.uid ?? '',
+      'cagri_tipi': cagriTipi,
+    };
+    if (sehir != null) data['sehir'] = sehir;
+
+    await FirebaseFirestore.instance.collection('cagrilar').doc(callId).set(data);
+
+    // Analytics: çağrı başlatıldı (PRD tamamlanan çağrı oranı paydası)
+    AnalyticsService.cagriBaslatildi();
+
+    // Kendi kameramızı açıp beklemeye başla
+    if (!mounted) return;
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CallScreen(
+          isVolunteer: false,
+          callId: callId,
+        ),
+      ),
+    );
+  }
+
+  /// Fiziksel çağrıda konum çözümlenirken gösterilen kısa yükleniyor diyaloğu.
+  void _showResolvingDialog() {
+    showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Semantics(
+        liveRegion: true,
+        label: 'Konumunuz belirleniyor, lütfen bekleyin.',
+        child: AlertDialog(
+          backgroundColor: AppColors.background,
+          content: const Row(
+            children: [
+              CircularProgressIndicator(),
+              SizedBox(width: 20),
+              Expanded(child: Text('Konumunuz belirleniyor...')),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
 }

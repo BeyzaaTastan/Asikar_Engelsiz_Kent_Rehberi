@@ -7,7 +7,7 @@ import '../../constants/app_colors.dart';
 import '../../models/venue_model.dart';
 import '../../services/venue_service.dart';
 import '../../providers/venue_providers.dart';
-import '../route_screen.dart';
+import '../../router/app_router.dart';
 
 class VenueDetailScreen extends ConsumerStatefulWidget {
   final String venueId;
@@ -540,14 +540,13 @@ class _VenueDetailScreenState extends ConsumerState<VenueDetailScreen> {
                         height: 54,
                         child: ElevatedButton.icon(
                           onPressed: () {
-                            Navigator.push(
+                            Navigator.pushNamed(
                               context,
-                              MaterialPageRoute(
-                                builder: (context) => RouteScreen(
-                                  destinationName: venue.name,
-                                  destinationLocation: LatLng(venue.latitude, venue.longitude),
-                                ),
-                              ),
+                              AppRoutes.routeScreen,
+                              arguments: {
+                                'destinationName': venue.name,
+                                'destinationLocation': LatLng(venue.latitude, venue.longitude),
+                              },
                             );
                           },
                           icon: const Icon(Icons.directions, color: Colors.white),

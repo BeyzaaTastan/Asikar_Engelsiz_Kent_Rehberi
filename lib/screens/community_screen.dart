@@ -3,10 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_colors.dart';
 import '../models/venue_model.dart';
 import '../providers/venue_providers.dart';
-import 'venue/venue_detail_screen.dart';
-import 'venue/add_venue_screen.dart';
+import '../router/app_router.dart';
 import 'package:latlong2/latlong.dart';
-import 'route_screen.dart';
 
 class CommunityScreen extends ConsumerStatefulWidget {
   const CommunityScreen({super.key});
@@ -304,10 +302,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
       ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
-          Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const AddVenueScreen()),
-          );
+          Navigator.pushNamed(context, AppRoutes.addVenue);
         },
         backgroundColor: AppColors.primary,
         icon: const Icon(Icons.add_location_alt, color: Colors.white),
@@ -580,14 +575,13 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                           // Yol Tarifi button
                           TextButton.icon(
                             onPressed: () {
-                              Navigator.push(
+                              Navigator.pushNamed(
                                 context,
-                                MaterialPageRoute(
-                                  builder: (context) => RouteScreen(
-                                    destinationName: venue.name,
-                                    destinationLocation: LatLng(venue.latitude, venue.longitude),
-                                  ),
-                                ),
+                                AppRoutes.routeScreen,
+                                arguments: {
+                                  'destinationName': venue.name,
+                                  'destinationLocation': LatLng(venue.latitude, venue.longitude),
+                                },
                               );
                             },
                             icon: const Icon(Icons.navigation, size: 14),
@@ -604,11 +598,10 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                           // Detaylar Button
                           ElevatedButton(
                             onPressed: () {
-                              Navigator.push(
+                              Navigator.pushNamed(
                                 context,
-                                MaterialPageRoute(
-                                  builder: (context) => VenueDetailScreen(venueId: venue.id),
-                                ),
+                                AppRoutes.venueDetail,
+                                arguments: {'venueId': venue.id},
                               );
                             },
                             style: ElevatedButton.styleFrom(

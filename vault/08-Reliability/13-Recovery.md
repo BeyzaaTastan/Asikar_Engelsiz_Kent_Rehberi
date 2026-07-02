@@ -47,7 +47,7 @@ Recovery iki ayrı varlık sınıfında düşünülür:
 - Yedekten geri yükleme hiç denendi mi? (denenmemiş yedek = yedek değil)
 
 ## TODO
-- [ ] **Keystore + şifresini 2 güvenli yere yedekle** — geri alınamaz risk, en yüksek öncelik
+- [~] **Keystore + şifresini 2 güvenli yere yedekle** — geri alınamaz risk, en yüksek öncelik. *2026-06-29 (K2):* imzalama altyapısı `key.properties` deseniyle hazır (`android/build.gradle.kts`, şablon `android/key.properties.example`, debug fallback `signingReport` ile doğrulandı). **Kalan:** keystore'u fiilen üret (`keytool`) ve 2 güvenli yere yedekle; henüz keystore YOK (release hâlâ debug'a düşüyor) → [[05-Barindirma]]
 - [ ] `.env` / Agora sertifikası yedeğini güvenli kasaya al
 - [ ] Haftalık `gcloud firestore export` (manuel veya scheduled function) kur
 - [ ] Yedek owner / kurtarma e-postası tanımla

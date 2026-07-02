@@ -2,6 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import 'package:uuid/uuid.dart';
 import '../models/venue_model.dart';
+import 'accessibility_score.dart';
+import 'venue_aggregates.dart';
+import 'comment_validation.dart';
 
 class VenueException implements Exception {
   final String message;
@@ -32,7 +35,7 @@ class VenueService {
   /// Calculates initial accessibility score based on checked features.
   Future<void> addVenue(VenueModel venue) async {
     try {
-      final int initialScore = _calculateScore(venue.features, venue.averageRating);
+      final int initialScore = calculateAccessibilityScore(venue.features, venue.averageRating);
       final updatedVenue = venue.copyWith(
         id: venue.id.isEmpty ? _uuid.v4() : venue.id,
         accessibilityScore: initialScore,
@@ -59,31 +62,21 @@ class VenueService {
         }
 
         final venue = VenueModel.fromJson(docSnap.data()!);
-        
-        // Add the new comment
-        final updatedComment = comment.copyWith(id: _uuid.v4());
-        final List<CommentModel> newComments = List.from(venue.comments)..add(updatedComment);
 
-        // Recalculate average rating
-        double totalRating = 0;
-        for (var c in newComments) {
-          totalRating += c.rating;
-        }
-        final double averageRating = totalRating / newComments.length;
-
-        // Merge verified features: if a feature is verified by a user, we can ensure it is added to the venue's features
-        final Set<String> updatedFeatures = Set.from(venue.features);
-        updatedFeatures.addAll(comment.verifiedFeatures);
-
-        // Recalculate accessibility score
-        final int newScore = _calculateScore(updatedFeatures.toList(), averageRating);
-
-        final updatedVenue = venue.copyWith(
-          comments: newComments,
-          averageRating: averageRating,
-          features: updatedFeatures.toList(),
-          accessibilityScore: newScore,
+        // Gömülü yorum 1MB belge sınırına dayanmasın: içerik uzunluğu + yorum sayısı
+        // üst sınır kontrolü (saf/test edilebilir: lib/services/comment_validation.dart).
+        final commentError = validateNewComment(
+          content: comment.content,
+          existingCommentCount: venue.comments.length,
         );
+        if (commentError != null) {
+          throw VenueException(commentError);
+        }
+
+        // Yorumu ekle + ortalama puan / birleşik özellik / skoru yeniden hesapla.
+        // Saf/test edilebilir mantık: lib/services/venue_aggregates.dart
+        final updatedComment = comment.copyWith(id: _uuid.v4());
+        final updatedVenue = venueWithNewComment(venue, updatedComment);
 
         transaction.set(docRef, updatedVenue.toJson());
       });
@@ -94,24 +87,6 @@ class VenueService {
       if (e is VenueException) rethrow;
       throw VenueException("Yorum ve derecelendirme eklenirken internet bağlantınızda veya sunucuda bir hata oluştu.");
     }
-  }
-
-  /// Calculates the accessibility score out of 100.
-  /// Base features count contributes 70 points, reviews contribute 30 points.
-  int _calculateScore(List<String> features, double avgRating) {
-    const int totalPossibleFeatures = 8; // Rampa, Asansör, Tuvalet, Otopark, Hissedilebilir, Kabartma, Sesli, İşaret
-    final double featureRatio = features.length / totalPossibleFeatures;
-    
-    // Scale feature ratio to 70 points max
-    final double featurePoints = featureRatio * 70;
-    
-    // Scale 1-5 rating to 30 points max
-    final double ratingPoints = (avgRating / 5.0) * 30;
-
-    int score = (featurePoints + ratingPoints).round();
-    if (score > 100) score = 100;
-    if (score < 5) score = 5; // minimum score baseline if at least something is there
-    return score;
   }
 
   /// Seeds 7 initial high-quality venues in Sakarya.

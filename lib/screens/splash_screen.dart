@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
-import '../main_wrapper.dart'; // Auth durumuna göre yönlendirme yapan bekçi
+import '../router/app_router.dart'; // Auth durumuna göre yönlendirme yapan bekçi
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -17,9 +17,7 @@ class _SplashScreenState extends State<SplashScreen> {
     // 6 Mayıs tesliminde buraya Firebase Auth kontrolü ekleyeceğiz (Giriş yapmış mı?).
     Future.delayed(const Duration(seconds: 3), () {
       if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(builder: (context) => const MainWrapper()),
-        );
+        Navigator.of(context).pushReplacementNamed(AppRoutes.mainWrapper);
       }
     });
   }

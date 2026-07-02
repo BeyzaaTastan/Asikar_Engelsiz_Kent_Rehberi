@@ -21,7 +21,7 @@ Bulut, tüm omurganın (auth, veri, fonksiyon, push) üzerinde durduğu zemindir
 
 **Plan:** **Blaze (kullandıkça öde)** — ama düşük kullanımda pratikte ücretsiz.
 **Neden Blaze (Spark değil):** Cloud Functions **Blaze gerektirir** (Spark'ta deploy edilemez). Blaze'in ücretsiz kotaları Spark ile aynı; tek şehir trafiğinde fatura ~0 ₺.
-**Düşük bütçe koruması:** GCP **bütçe alarmı** (örn. aylık 5$/10$ eşik) kurulmalı → beklenmedik kullanımda e-posta uyarısı.
+**$0 disiplini koruması (canlı ürün için kritik):** GCP **bütçe alarmı** (örn. aylık 5$/10$ eşik) kurulmalı → Türkiye geneli açılımda beklenmedik kullanım/kötüye kullanımda e-posta uyarısı.
 
 **Kullanılan yönetilen servisler:**
 | Servis | Rol | Maliyet profili |
@@ -36,6 +36,8 @@ Bulut, tüm omurganın (auth, veri, fonksiyon, push) üzerinde durduğu zemindir
 | Firebase Hosting | Web (ops.) | Ücretsiz katman |
 
 **3. parti (Firebase dışı, ama "bulut" bağımlılığı):** Agora RTC (aylık 10.000 ücretsiz dakika), Foursquare Places (ücretsiz tier), OSM (ücretsiz, kullanım politikasına tabi). Bunlar dış servis → tek bulut sağlayıcıya kilitli değiliz.
+
+**Cloudflare (ikinci bulut, *2026-06-29*, O12 — POI taban katmanı):** Türkiye geneli POI verisi (**2.16M**) Firebase'e **bilinçli olarak konmadı** (okuma başına fatura); bunun yerine **Cloudflare Worker + R2** üzerinde z12 tile JSON'ları olarak, istek başına ücretsiz (R2 egress $0 + edge cache) servis edilir. **D1 elendi:** 2.16M satır D1 ücretsiz yazma kotasına (100k/gün) sığmıyor. Detay + neden: [[03-Veritabani]] · "POI taban katmanı". **Maliyet izleme:** Firebase bütçe alarmı dışında Cloudflare free tier limitlerini (R2 10GB depo + 1M yazma/ay + 10M okuma/ay, Workers 100k istek/gün) de gözle → [[09-Rate-Limiting]]. **Neden ikinci sağlayıcı:** Firebase'in güçlü olduğu yer realtime/auth; büyük salt-okunur coğrafi veriyi $0 dağıtmak Cloudflare'in (egress-ücretsiz R2) güçlü olduğu yer.
 
 ## MVP Kapsamı
 **VAR:**
@@ -65,7 +67,7 @@ Bulut, tüm omurganın (auth, veri, fonksiyon, push) üzerinde durduğu zemindir
 
 ## İlgili Notlar
 - [[Architecture-Overview]] — bulut omurgasının sistemdeki yeri
-- [[Vision]] — düşük bütçe Firebase tercihinin dayanağı
+- [[Vision]] — $0/düşük katman Firebase tercihinin dayanağı
 - [[02-API-Arka-Uc]] — Cloud Functions'ı barındırır
 - [[03-Veritabani]] — Firestore'u barındırır
 - [[04-Auth]] — Firebase Auth'u barındırır

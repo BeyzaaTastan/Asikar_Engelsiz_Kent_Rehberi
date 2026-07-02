@@ -31,6 +31,10 @@ service cloud.firestore {
     //   - volunteer_uid:   string     (optional) - Çağrıyı üstlenen gönüllünün UID'si.
     //                                  YOK iken oluşturulur; yalnızca 'bekliyor → cevaplandi'
     //                                  geçişinde (isCagriClaim) tek seferlik yazılır.
+    //   - cagri_tipi:      string     (optional, immutable) - 'fiziksel' | 'uzaktan'.
+    //                                  Yönlendirmeyi belirler (fiziksel → aynı şehir).
+    //   - sehir:           string     (optional, immutable, slug) - Fiziksel çağrının
+    //                                  şehir slug'ı ([a-z0-9_-], max 60). FCM 'volunteers_<sehir>'.
     //
     // Collection: venues
     // Document ID: {venueId} (UUID)
@@ -119,13 +123,15 @@ service cloud.firestore {
     function isValidNewCagri() {
       let d = request.resource.data;
       return hasRequiredFields(['callId', 'kanal_adi', 'cagri_durumu', 'zaman', 'caller_name', 'caller_uid']) &&
-             hasOnlyAllowedFields(['callId', 'kanal_adi', 'cagri_durumu', 'zaman', 'caller_name', 'caller_uid']) &&
+             hasOnlyAllowedFields(['callId', 'kanal_adi', 'cagri_durumu', 'zaman', 'caller_name', 'caller_uid', 'cagri_tipi', 'sehir']) &&
              d.callId is string && d.callId.size() > 0 && d.callId.size() <= 128 &&
              d.kanal_adi is string && d.kanal_adi.size() > 0 && d.kanal_adi.size() <= 128 &&
              d.cagri_durumu == 'bekliyor' &&
              d.zaman is timestamp &&
              d.caller_name is string && d.caller_name.size() > 0 && d.caller_name.size() <= 100 &&
-             d.caller_uid is string && d.caller_uid == request.auth.uid;
+             d.caller_uid is string && d.caller_uid == request.auth.uid &&
+             (!('cagri_tipi' in d) || (d.cagri_tipi in ['fiziksel', 'uzaktan'])) &&
+             (!('sehir' in d) || (d.sehir is string && d.sehir.size() > 0 && d.sehir.size() <= 60 && d.sehir.matches('^[a-z0-9_-]+$')));
     }
 
     // --- CAGRILAR: Durum makinesi geçişleri ---

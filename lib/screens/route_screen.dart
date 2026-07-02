@@ -64,21 +64,21 @@ class _RouteScreenState extends State<RouteScreen>
       icon: Icons.directions_walk,
       primaryUrlBuilder: _footPrimaryUrl,
       secondaryUrlBuilder: _footSecondaryUrl,
-      color: const Color(0xFF34A853),
+      color: AppColors.routeWalk,
     ),
     _TransportMode(
       label: 'Tekerlekli\nSandalye',
       icon: Icons.accessible_forward,
       primaryUrlBuilder: _footPrimaryUrl,   // Tekerlekli sandalye de yaya yollarını kullanır
       secondaryUrlBuilder: _footSecondaryUrl,
-      color: const Color(0xFF1A73E8),
+      color: AppColors.routeWheelchair,
     ),
     _TransportMode(
       label: 'Taşıt',
       icon: Icons.directions_bus,
       primaryUrlBuilder: _drivingPrimaryUrl,
       secondaryUrlBuilder: _drivingSecondaryUrl,
-      color: const Color(0xFFFF6D00),
+      color: AppColors.routeTransit,
     ),
   ];
 
@@ -655,7 +655,7 @@ class _RouteScreenState extends State<RouteScreen>
               ),
             ),
             const SizedBox(height: 16),
-            const Divider(height: 1, color: Color(0xFFEEEEEE)),
+            const Divider(height: 1, color: AppColors.divider),
             const SizedBox(height: 16),
 
             // Süre & Mesafe

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
-import '../screens/profile_screen.dart';
+import '../router/app_router.dart';
 
 // --- ORTAK APP BAR ---
 /// 3 Home ekranında (Disabled, Standard, Volunteer) tekrarlanan
@@ -35,10 +35,7 @@ class CustomAppBar extends StatelessWidget implements PreferredSizeWidget {
       actions: [
         IconButton(
           icon: const Icon(Icons.account_circle, color: AppColors.primary, size: 32),
-          onPressed: () => Navigator.push(
-            context,
-            MaterialPageRoute(builder: (context) => const ProfileScreen()),
-          ),
+          onPressed: () => Navigator.pushNamed(context, AppRoutes.profile),
         ),
       ],
     );

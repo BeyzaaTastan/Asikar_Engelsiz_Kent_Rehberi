@@ -6,7 +6,8 @@ admin.initializeApp();
 // =============================================================================
 // Fonksiyon 1: Çağrı Bildirimi Gönderici
 // Firestore'daki 'cagrilar' koleksiyonunu dinler; durum 'bekliyor' olursa
-// 'volunteers' FCM topic'ine bildirim gönderir.
+// FCM topic'ine bildirim gönderir. Çağrı tipine göre yönlendirme:
+//   fiziksel → 'volunteers_<sehir>' (aynı şehir), uzaktan → global 'volunteers'.
 // =============================================================================
 exports.cagriBildirimiGonder = functions.region('europe-west3').firestore
     .document('cagrilar/{cagriId}')
@@ -32,12 +33,34 @@ exports.cagriBildirimiGonder = functions.region('europe-west3').firestore
             return null;
         }
 
+        // Çağrı tipine göre topic seçimi (bkz. vault/07-Performance/11-Olcekleme.md):
+        //  - 'fiziksel' (yerinde yardım/şehir rehberliği) → yalnızca 'volunteers_<sehir>'
+        //    (yerinde bulunmayan gönüllüye gitmesi anlamsız). sehir istemcide anlık
+        //    GPS'ten çözülüp topic-güvenli slug olarak yazılır.
+        //  - 'uzaktan' / eksik tip → global 'volunteers' (konumdan bağımsız herkes).
+        //  - Fiziksel ama sehir yok/geçersizse çağrı kaybolmasın diye global'e düşülür.
+        const CITY_SLUG_RE = /^[a-z0-9_-]{1,60}$/;
+        const cagriTipi = afterData.cagri_tipi;
+        const sehir = afterData.sehir;
+        let topic = "volunteers";
+        if (cagriTipi === 'fiziksel') {
+            if (typeof sehir === 'string' && CITY_SLUG_RE.test(sehir)) {
+                topic = `volunteers_${sehir}`;
+            } else {
+                console.warn(
+                    "Fiziksel çağrıda geçerli sehir yok, global 'volunteers'a düşülüyor.",
+                    "cagriId:", context.params.cagriId, "sehir:", sehir
+                );
+            }
+        }
+
         const message = {
-            topic: "volunteers",
+            topic: topic,
             data: {
                 type: 'call',
                 caller_name: afterData.caller_name || 'Aşikar Kullanıcısı',
-                channel_name: channelName
+                channel_name: channelName,
+                cagri_tipi: typeof cagriTipi === 'string' ? cagriTipi : 'uzaktan'
             },
             android: {
                 priority: 'high',
@@ -156,6 +179,36 @@ exports.generateAgoraToken = functions.region('europe-west3').https
             throw new functions.https.HttpsError(
                 'invalid-argument',
                 'Geçerli bir channelName girilmelidir.'
+            );
+        }
+
+        // Katılımcı doğrulaması (mahremiyet kapısı): channelName = çağrı belge ID'si
+        // (kanal_adi == cagriId). Token YALNIZCA çağrının katılımcısına (arayan ya da
+        // üstlenen gönüllü) ve çağrı HÂLÂ aktifken (bekliyor|cevaplandi) verilir.
+        // Aksi halde herhangi bir auth'lı kullanıcı kanal adını okuyup başkasının
+        // görüntülü görüşmesine girebilirdi (özel nitelikli veri ihlali).
+        // (bkz. vault/06-Security/08-Guvenlik.md, vault/03-Data/03-Veritabani.md durum makinesi)
+        const callSnap = await admin.firestore().collection('cagrilar').doc(channelName).get();
+        if (!callSnap.exists) {
+            throw new functions.https.HttpsError(
+                'not-found',
+                'Geçerli bir çağrı bulunamadı.'
+            );
+        }
+        const call = callSnap.data();
+        const isParticipant =
+            context.auth.uid === call.caller_uid ||
+            context.auth.uid === call.volunteer_uid;
+        const isActiveCall =
+            call.cagri_durumu === 'bekliyor' || call.cagri_durumu === 'cevaplandi';
+        if (!isParticipant || !isActiveCall) {
+            console.warn(
+                'Yetkisiz Agora token isteği reddedildi (katılımcı değil veya çağrı aktif değil). Kanal:',
+                channelName, 'Durum:', call.cagri_durumu
+            );
+            throw new functions.https.HttpsError(
+                'permission-denied',
+                'Bu görüşme için token alma yetkiniz yok.'
             );
         }
 

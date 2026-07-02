@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_colors.dart';
@@ -8,18 +7,29 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
-import 'package:asikar_engelsiz_kent_rehberi/screens/route_screen.dart';
+import '../router/app_router.dart';
 import '../services/map_search_service.dart';
 import '../services/settings_service.dart';
 import '../services/overpass_poi_service.dart';
 import '../services/foursquare_places_service.dart';
+import '../services/fsq_poi_service.dart';
+import '../services/overpass_query_builder.dart';
+import '../services/voice_search_service.dart';
 import '../models/venue_model.dart';
 import '../models/osm_poi_model.dart';
 import '../providers/venue_providers.dart';
 import 'map/map_visuals.dart';
-import 'map/map_action_button.dart';
+import 'map/poi_marker.dart';
+import 'map/poi_priority.dart';
+import 'map/poi_declutter.dart';
 import 'map/osm_poi_sheet.dart';
 import 'map/venue_sheet.dart';
+import 'map/map_attribution.dart';
+import 'map/voice_search_button.dart';
+import 'map/unknown_point_sheet.dart';
+import 'map/smart_results_overlay.dart';
+import 'map/map_type_card.dart';
+import 'map/map_overlay_chip.dart';
 
 
 // Harita türü
@@ -32,8 +42,12 @@ class MapScreen extends ConsumerStatefulWidget {
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends ConsumerState<MapScreen> {
+class _MapScreenState extends ConsumerState<MapScreen>
+    with TickerProviderStateMixin {
   final MapController _mapController = MapController();
+
+  /// Devam eden yumuşak harita geçişi (varsa). Yeni geçiş başlarken iptal edilir.
+  AnimationController? _moveAnimController;
   final TextEditingController _searchController = TextEditingController();
 
   bool _isSearchActive = false;
@@ -43,9 +57,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _isPlaceSelected = false;
   VenueModel? _selectedVenue;
 
-  // Seçili olan erişilebilirlik filtresi
-  String _activeFilter = 'Tekerlekli Sandalye';
-
   final LatLng _sakaryaCenter = const LatLng(40.7731, 29.9833);
   LatLng? _currentLocation;
   bool _isLoadingLocation = false;
@@ -53,6 +64,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _isLoading = false;
   final MapSearchService _searchService = MapSearchService();
   SettingsService? _settingsService;
+
+  // Sesli arama (cihaz OS tanıyıcısı — ücretsiz/anahtarsız)
+  final VoiceSearchService _voiceSearch = VoiceSearchService();
+  bool _isListening = false;
 
   // Kullanıcının gerçek son aramaları — SharedPreferences'tan yüklenir
   List<Map<String, dynamic>> _recentSearches = [];
@@ -73,12 +88,28 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   // ── OSM POI durumu ──────────────────────────────────────────────────────
   final OverpassPoiService _overpassPoiService = OverpassPoiService();
   final FoursquarePlacesService _foursquareService = FoursquarePlacesService();
+  // Türkiye geneli taban katmanı (Cloudflare Worker + D1). POI_API_BASE_URL
+  // boşsa devre dışı — backend deploy edilene kadar etki etmez.
+  final FsqPoiService _fsqPoiService = FsqPoiService();
   List<OsmPoi> _osmPois = [];
   OsmPoi? _selectedOsmPoi;
   bool _isLoadingPois = false;
+  // Hibrit POI yüklemesinde iki kaynak ayrı biter; gösterge ikisi de bitince kapanır.
+  // (Foursquare key'i boşsa eski kod yalnızca FSQ onResult'una bağlıydı → gösterge takılırdı.)
+  bool _overpassLoading = false;
+  bool _fsqLoading = false;
+  bool _fsqOsLoading = false;
   // ignore: prefer_final_fields — set'in içeriği .add()/.remove() ile değiştiriliyor
   Set<String> _selectedPoiCategories = {};
-  double _currentZoom = 14.0;
+  // POI verisi bu zoom'un altında çekilmez/gösterilmez (şehir ölçeğinde harita
+  // boş kalır, kota korunur). Bu eşiğin ÜSTÜNDE hangi POI'nin isim/nokta/gizli
+  // olacağına Google tarzı declutter karar verir (kademeli görünürlük).
+  static const double _poiFetchMinZoom = 15.0;
+  // Declutter'a girecek azami POI sayısı (öncelik sırasına göre kırpılır) —
+  // çok yoğun bölgelerde relayout maliyetini sınırlar.
+  static const int _poiDeclutterCap = 700;
+  double _currentZoom = 15.0;
+  bool _mapReady = false;
 
 
   _MapType _mapType = _MapType.defaultMap;
@@ -88,6 +119,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _showTactile    = false;
   bool _showWheelchair = false;
   bool _showElevator   = false;
+  bool _showParking    = false;   // Engelli otoparkı katmanı
   List<Polyline> _accessibilityPolylines = [];
   List<Polyline> _hikingPolylines        = [];   // Overpass yaya yolları
   List<Marker>   _accessibilityMarkers   = [];
@@ -98,13 +130,17 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     super.initState();
     _searchController.addListener(_onSearchChanged);
     _loadRecentSearches();
+    _initLocationOnStart();
   }
 
   @override
   void dispose() {
+    _moveAnimController?.dispose();
+    _voiceSearch.cancel();
     _searchService.dispose();
     _overpassPoiService.dispose();
     _foursquareService.dispose();
+    _fsqPoiService.dispose();
     _searchController.dispose();
     _sheetController.dispose();
     super.dispose();
@@ -133,6 +169,65 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       },
       onLoadingChanged: (loading) {
         if (mounted) setState(() => _isLoading = loading);
+      },
+    );
+  }
+
+  /// Sesli arama mikrofonuna dokununca: dinliyorsa durdurur; değilse izin alıp
+  /// dinlemeye başlar. Tanınan metin arama kutusuna yazılır → mevcut arama akışı
+  /// (`_onSearchChanged` → debounce'lı Nominatim/Overpass) kendiliğinden tetiklenir.
+  Future<void> _onVoiceSearchPressed() async {
+    if (_isListening) {
+      await _voiceSearch.stop();
+      if (mounted) setState(() => _isListening = false);
+      return;
+    }
+
+    final available = await _voiceSearch.initialize(
+      onStatus: (status) {
+        // 'done' / 'notListening' → OS dinlemeyi bitirdi.
+        if (mounted &&
+            _isListening &&
+            (status == 'done' || status == 'notListening')) {
+          setState(() => _isListening = false);
+        }
+      },
+      onError: (_) {
+        if (!mounted) return;
+        setState(() => _isListening = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text(
+                  'Sesli arama başlatılamadı. Mikrofon iznini kontrol edin.')),
+        );
+      },
+    );
+
+    if (!available) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text(
+                'Cihazınızda sesli arama (konuşma tanıma) kullanılamıyor.')),
+      );
+      return;
+    }
+
+    if (mounted) {
+      setState(() {
+        _isSearchActive = true;
+        _isListening = true;
+      });
+    }
+
+    await _voiceSearch.listen(
+      onResult: (text, isFinal) {
+        if (!mounted) return;
+        // Metni yaz → _onSearchChanged listener'ı aramayı tetikler.
+        _searchController.text = text;
+        _searchController.selection =
+            TextSelection.fromPosition(TextPosition(offset: text.length));
+        if (isFinal) setState(() => _isListening = false);
       },
     );
   }
@@ -222,6 +317,103 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
+  /// Harita ilk açıldığında konumu **izin İSTEMEDEN** yükler.
+  ///
+  /// Kullanıcı daha önce (bir kerelik) konum iznini verdiyse, açılışta tekrar
+  /// sistem izin diyaloğu göstermeden konumuna ortalar: önce hızlı **son bilinen
+  /// konum** (cache'li → anında), ardından **güncel konumla** tazeler. İzin
+  /// verilmemişse hiçbir şey yapmaz — harita Sakarya merkezinde kalır (fallback).
+  /// "Konumum" butonu (`_getCurrentLocation`) izin isteme akışını korur.
+  Future<void> _initLocationOnStart() async {
+    try {
+      if (!await Geolocator.isLocationServiceEnabled()) return;
+
+      // İzin İSTEME — yalnızca mevcut durumu kontrol et.
+      final permission = await Geolocator.checkPermission();
+      final granted = permission == LocationPermission.always ||
+          permission == LocationPermission.whileInUse;
+      if (!granted) return;
+
+      // Hızlı: son bilinen konum (cache'li) → anında ortala.
+      final last = await Geolocator.getLastKnownPosition();
+      if (last != null && mounted) {
+        _applyStartLocation(LatLng(last.latitude, last.longitude));
+      }
+
+      // Kesin: güncel konumla tazele (son bilinen yoksa/eskiyse düzeltir).
+      final current = await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(accuracy: LocationAccuracy.high),
+      );
+      if (mounted) {
+        _applyStartLocation(LatLng(current.latitude, current.longitude));
+      }
+    } catch (_) {
+      // Açılışta konum kritik değil; hata olursa Sakarya merkezi gösterilir.
+    }
+  }
+
+  /// Açılış konumunu uygular: kullanıcı marker'ını günceller ve harita hazırsa
+  /// oraya **yumuşak** taşır. Harita henüz hazır değilse `onMapReady` taşır.
+  void _applyStartLocation(LatLng pos) {
+    setState(() => _currentLocation = pos);
+    if (_mapReady) {
+      _animatedMapMove(pos, 16.0, onFinished: _fetchPoisAfterMove);
+    }
+  }
+
+  /// Haritayı hedefe **yumuşak** taşır (ani sıçrama yerine kayan geçiş).
+  /// flutter_map yerleşik animasyon sunmaz; `Tween` + `AnimationController` ile
+  /// her karede `move` çağrılır. Devam eden bir geçiş varsa iptal edilir.
+  /// [onFinished] yalnızca animasyon **tamamlanınca** (iptal değil) çağrılır.
+  void _animatedMapMove(
+    LatLng dest,
+    double destZoom, {
+    Duration duration = const Duration(milliseconds: 700),
+    VoidCallback? onFinished,
+  }) {
+    // Önceki geçişi iptal et (üst üste binen animasyonlar titremesin).
+    _moveAnimController?.dispose();
+
+    final camera = _mapController.camera;
+    final latTween =
+        Tween<double>(begin: camera.center.latitude, end: dest.latitude);
+    final lngTween =
+        Tween<double>(begin: camera.center.longitude, end: dest.longitude);
+    final zoomTween = Tween<double>(begin: camera.zoom, end: destZoom);
+
+    final controller = AnimationController(duration: duration, vsync: this);
+    _moveAnimController = controller;
+    final anim = CurvedAnimation(parent: controller, curve: Curves.easeInOut);
+
+    controller.addListener(() {
+      if (!mounted) return;
+      _mapController.move(
+        LatLng(latTween.evaluate(anim), lngTween.evaluate(anim)),
+        zoomTween.evaluate(anim),
+      );
+    });
+    controller.addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        controller.dispose();
+        if (identical(_moveAnimController, controller)) {
+          _moveAnimController = null;
+        }
+        onFinished?.call();
+      }
+    });
+    controller.forward();
+  }
+
+  /// Geçiş bittikten sonra hedef alandaki POI'leri çeker (zoom eşiği geçtiyse).
+  void _fetchPoisAfterMove() {
+    if (!mounted) return;
+    if (_mapController.camera.zoom >= _poiFetchMinZoom) {
+      _fetchPoisForVisibleArea(_mapController.camera.visibleBounds,
+          immediate: true);
+    }
+  }
+
   Future<void> _getCurrentLocation() async {
     setState(() => _isLoadingLocation = true);
 
@@ -269,7 +461,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         _isLoadingLocation = false;
       });
 
-      _mapController.move(myPosition, 16.0);
+      _animatedMapMove(myPosition, 16.0);
     } catch (e) {
       setState(() => _isLoadingLocation = false);
       if (!mounted) return;
@@ -315,8 +507,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             mapController: _mapController,
             options: MapOptions(
               initialCenter: _sakaryaCenter,
-              initialZoom: 14.0,
+              initialZoom: 15.0,
               maxZoom: 18.0,
+              // Harita hazır: kamera artık projeksiyon (declutter) için kullanılabilir.
+              // Zoom eşiği aşılmışsa ilk POI çekimini başlat.
+              onMapReady: () {
+                setState(() => _mapReady = true);
+                // Açılışta konum çözüldüyse (izin önceden verilmiş) kullanıcı
+                // konumuna **yumuşak** kay — harita hazır olmadan taşınamadığı
+                // için burada. POI çekimi geçiş bitince (onFinished) yapılır.
+                if (_currentLocation != null) {
+                  _animatedMapMove(_currentLocation!, 16.0,
+                      onFinished: _fetchPoisAfterMove);
+                } else if (_mapController.camera.zoom >= _poiFetchMinZoom) {
+                  _fetchPoisForVisibleArea(
+                      _mapController.camera.visibleBounds,
+                      immediate: true);
+                }
+              },
               onTap: (tapPosition, point) {
                 if (_isSearchActive) {
                   setState(() => _isSearchActive = false);
@@ -333,10 +541,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               onMapEvent: (event) {
                 if (event is MapEventMoveEnd) {
                   final zoom = event.camera.zoom;
+                  // Hareket bitince setState → build declutter'ı yeni kamerayla
+                  // yeniden hesaplar (isim/nokta yerleşimi güncellenir).
                   setState(() => _currentZoom = zoom);
-                  if (zoom >= 15) {
+                  if (zoom >= _poiFetchMinZoom) {
                     _fetchPoisForVisibleArea(event.camera.visibleBounds);
                   } else {
+                    // Şehir ölçeğine inince POI'leri temizle (harita boş kalsın).
                     setState(() => _osmPois = []);
                   }
                 }
@@ -372,84 +583,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               // ── Erişilebilirlik node marker'ları (Overpass API) ──
               if (_accessibilityMarkers.isNotEmpty)
                 MarkerLayer(markers: _accessibilityMarkers),
-              // ── OSM POI Marker'ları (Overpass: kafe, eczane, market vb.) ──
-              if (_osmPois.isNotEmpty && _currentZoom >= 15)
+              // ── OSM POI Marker'ları — Google tarzı kademeli görünürlük ──
+              // Declutter (map/poi_declutter.dart) her POI için isim / nokta /
+              // gizli kararı verir: öncelikli (map/poi_priority.dart) mekanlar
+              // ismini korur, çakışanlar noktaya düşer, sığmayan gizlenir.
+              // Böylece uzakta az mekan, yaklaşınca daha fazlası isimle belirir.
+              if (_osmPois.isNotEmpty && _mapReady && _currentZoom >= _poiFetchMinZoom)
                 MarkerLayer(
-                  markers: _osmPois.map((poi) {
-                    final iconData = MapVisuals.poiIcon(poi.amenityType);
-                    final color = MapVisuals.poiColor(poi.amenityType);
-                    final isSelected = _selectedOsmPoi?.uniqueKey == poi.uniqueKey;
-                    return Marker(
-                      point: LatLng(poi.latitude, poi.longitude),
-                      width: isSelected ? 160 : 130,
-                      height: isSelected ? 75 : 62,
-                      child: GestureDetector(
-                        onTap: () => _onOsmPoiTapped(poi),
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            // İsim etiketi
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 6, vertical: 2),
-                              decoration: BoxDecoration(
-                                color: isSelected
-                                    ? color
-                                    : Colors.white,
-                                borderRadius: BorderRadius.circular(6),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: Colors.black.withValues(alpha: 0.15),
-                                    blurRadius: 4,
-                                    offset: const Offset(0, 1),
-                                  ),
-                                ],
-                                border: Border.all(
-                                  color: isSelected
-                                      ? color
-                                      : Colors.grey.shade300,
-                                  width: 0.5,
-                                ),
-                              ),
-                              child: Text(
-                                poi.name,
-                                style: TextStyle(
-                                  fontSize: isSelected ? 11 : 10,
-                                  fontWeight: FontWeight.w600,
-                                  color: isSelected
-                                      ? Colors.white
-                                      : AppColors.surface,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            const SizedBox(height: 2),
-                            // Kategori ikonu
-                            Container(
-                              width: isSelected ? 34 : 28,
-                              height: isSelected ? 34 : 28,
-                              decoration: BoxDecoration(
-                                color: color,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                    color: Colors.white, width: 2),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: color.withValues(alpha: 0.4),
-                                    blurRadius: 6,
-                                  ),
-                                ],
-                              ),
-                              child: Icon(iconData,
-                                  color: Colors.white,
-                                  size: isSelected ? 18 : 14),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  }).toList(),
+                  markers: _buildPoiMarkers(),
                 ),
               // Firestore'daki gerçek venue'lar → Dinamik Marker'lar
               venuesAsync.when(
@@ -590,11 +731,19 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           ),
                         ),
                         if (_isSearchActive)
-                          IconButton(
-                            icon: const Icon(Icons.close,
-                                color: AppColors.outline),
-                            onPressed: () => _searchController.clear(),
-                          )
+                          // Dinlerken veya alan boşken: sesli arama mikrofonu.
+                          // Metin varken: temizle (×). Dinleme sırasında partial
+                          // sonuçlar alanı doldursa da mikrofon (kırmızı) kalır.
+                          (_isListening || _isSearchFieldEmpty
+                              ? VoiceSearchButton(
+                                  isListening: _isListening,
+                                  onTap: _onVoiceSearchPressed,
+                                )
+                              : IconButton(
+                                  icon: const Icon(Icons.close,
+                                      color: AppColors.outline),
+                                  onPressed: () => _searchController.clear(),
+                                ))
                         else
                           Row(
                             mainAxisSize: MainAxisSize.min,
@@ -614,20 +763,40 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ),
                 ),
-                if (_isSearchActive) const SizedBox(height: 12),
-                if (_isSearchActive)
-                  SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Row(
-                      children: [
-                        _buildFilterChip('Tekerlekli Sandalye', Icons.accessible),
-                        _buildFilterChip('Hissedilebilir Yüzey', Icons.blind),
-                        _buildFilterChip('Asansör', Icons.elevator),
-                        _buildFilterChip('Engelli Otoparkı', Icons.local_parking),
-                      ],
+                // Sesli arama dinleme göstergesi — ekran okuyucu için liveRegion.
+                if (_isListening)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 10),
+                    child: Semantics(
+                      liveRegion: true,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.danger.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.mic,
+                                size: 16, color: AppColors.danger),
+                            const SizedBox(width: 6),
+                            const Text('Dinleniyor…',
+                                style: TextStyle(
+                                    color: AppColors.danger,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
                     ),
                   ),
+                // NOT: Erişilebilirlik filtre çipleri (Tekerlekli Sandalye /
+                // Hissedilebilir Yüzey / Asansör / Engelli Otoparkı) buradan
+                // kaldırıldı — aynı katmanlar harita filtreleme modalında
+                // (_showLayerPicker) yer alıyor; arama akışında tekrar
+                // gösterilmiyordu (2026-07-02).
               ],
             ),
           ),
@@ -652,7 +821,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           // 3. KATMAN: Arama Sonuçları
           if (_isSearchActive)
             Positioned(
-              top: MediaQuery.of(context).padding.top + 130,
+              top: MediaQuery.of(context).padding.top + 88,
               left: 16,
               right: 16,
               bottom: 16,
@@ -757,6 +926,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
             ),
 
+          // 4d. KATMAN: Veri kaynağı atıfları (Foursquare + OSM) — lisans zorunlu.
+          // Bottom-left: sağdaki FAB'larla çakışmaz. Arama açıkken cam panel
+          // haritayı örttüğü için gizlenir. Kaynak ekranda görünürse atıf görünür:
+          //   - Foursquare: haritada FSQ kaynaklı POI varsa.
+          //   - OSM: temel karo OSM türevliyse (varsayılan/arazi) VEYA OSM POI varsa;
+          //     Esri uydu karolarında yalnız FSQ varsa OSM atfı gösterilmez (yanlış beyan olmasın).
+          if (!_isSearchActive)
+            Positioned(
+              left: 8,
+              bottom: 8,
+              child: MapAttributionBadge(
+                showFoursquare: _osmPois.any((p) => p.isFoursquare),
+                showOsm: _mapType != _MapType.satellite ||
+                    _osmPois.any((p) => !p.isFoursquare),
+              ),
+            ),
+
           // 5. KATMAN: Google Maps tarzı Sürüklenebilir Detay Sheet
           if (_isPlaceSelected)
             DraggableScrollableSheet(
@@ -798,270 +984,84 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   // ─── Bilinmeyen koordinat sheet'i ──────────────────────────────────────────
+  // Sunum UnknownPointSheet'e taşındı (lib/screens/map/unknown_point_sheet.dart);
+  // kapatma + yol tarifi (Navigator/setState) state'e bağlı olduğu için burada bağlanır.
   Widget _buildUnknownPointSheet(ScrollController sc) {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      child: ListView(
-        controller: sc,
-        padding: const EdgeInsets.all(20),
-        children: [
-          Center(
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 16),
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                color: Colors.grey.shade300,
-                borderRadius: BorderRadius.circular(10),
+    return UnknownPointSheet(
+      scrollController: sc,
+      isLoadingAddress: _isLoadingTapInfo,
+      address: _tappedAddress,
+      point: _tappedPoint,
+      onClose: () => setState(() {
+        _isPlaceSelected = false;
+        _tappedPoint = null;
+        _tappedAddress = '';
+      }),
+      onDirections: _tappedPoint == null
+          ? null
+          : () => Navigator.pushNamed(
+                context,
+                AppRoutes.routeScreen,
+                arguments: {
+                  'destinationName': _tappedAddress.isNotEmpty
+                      ? _tappedAddress.split(',').first
+                      : 'Seçilen Konum',
+                  'destinationLocation': _tappedPoint!,
+                },
               ),
-            ),
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: _isLoadingTapInfo
-                    ? const Text('Adres yükleniyor...',
-                        style: TextStyle(
-                            fontSize: 15, color: Colors.grey))
-                    : Text(
-                        _tappedAddress.isNotEmpty
-                            ? _tappedAddress
-                            : 'Seçilen Konum',
-                        style: const TextStyle(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: AppColors.primary),
-                        maxLines: 3,
-                      ),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close, size: 20),
-                onPressed: () => setState(() {
-                  _isPlaceSelected = false;
-                  _tappedPoint = null;
-                  _tappedAddress = '';
-                }),
-              ),
-            ],
-          ),
-          if (_tappedPoint != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              '${_tappedPoint!.latitude.toStringAsFixed(5)}, '
-              '${_tappedPoint!.longitude.toStringAsFixed(5)}',
-              style: TextStyle(color: Colors.grey.shade500, fontSize: 12),
-            ),
-          ],
-          const SizedBox(height: 16),
-          Row(
-            children: [
-              MapActionButton(
-                icon: Icons.directions,
-                label: 'Yol Tarifi',
-                color: AppColors.primary,
-                onTap: _tappedPoint == null ? null : () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => RouteScreen(
-                      destinationName: _tappedAddress.isNotEmpty
-                          ? _tappedAddress.split(',').first
-                          : 'Seçilen Konum',
-                      destinationLocation: _tappedPoint!,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
     );
   }
 
-  Widget _buildFilterChip(String label, IconData icon) {
-    bool isSelected = _activeFilter == label;
-    return Padding(
-      padding: const EdgeInsets.only(right: 8.0),
-      child: InkWell(
-        onTap: () => setState(() {
-          _activeFilter = label;
-          _isSearchActive = true;
-          _isPlaceSelected = false;
-          _selectedVenue = null;
-        }),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: isSelected ? AppColors.primary : Colors.white,
-            borderRadius: BorderRadius.circular(30),
-            border: Border.all(
-                color: isSelected ? AppColors.primary : Colors.grey.shade300),
-          ),
-          child: Row(
-            children: [
-              Icon(icon,
-                  size: 18,
-                  color: isSelected ? Colors.white : AppColors.outline),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: TextStyle(
-                    color:
-                        isSelected ? Colors.white : AppColors.textDark,
-                    fontWeight:
-                        isSelected ? FontWeight.w600 : FontWeight.w500),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
+  // Sunum SmartResultsOverlay'e taşındı (lib/screens/map/smart_results_overlay.dart);
+  // liste verisi + öğe dokunma callback'i burada bağlanır.
   Widget _buildSmartResultsOverlay() {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(24),
-      child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-        child: Container(
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.92),
-            borderRadius: BorderRadius.circular(24),
-            border:
-                Border.all(color: Colors.white.withValues(alpha: 0.5)),
-            boxShadow: [
-              BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 20,
-                  offset: const Offset(0, 4)),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 20, 20, 10),
-                child: Row(
-                  children: [
-                    Text(
-                      _isSearchFieldEmpty
-                          ? "Son Aramalar"
-                          : "Önerilen Mekanlar",
-                      style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.primary.withValues(alpha: 0.6),
-                          letterSpacing: 0.5),
-                    ),
-                    if (_isLoading) ...[
-                      const SizedBox(width: 8),
-                      const SizedBox(
-                        width: 12,
-                        height: 12,
-                        child: CircularProgressIndicator(
-                            strokeWidth: 2, color: AppColors.primary),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              Expanded(
-                child: _isSearchFieldEmpty && _recentSearches.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.history, size: 40, color: Colors.grey.shade300),
-                            const SizedBox(height: 12),
-                            Text(
-                              'Henüz arama geçmişi yok',
-                              style: TextStyle(color: Colors.grey.shade400, fontSize: 14),
-                            ),
-                          ],
-                        ),
-                      )
-                    : ListView.separated(
-                        padding: EdgeInsets.zero,
-                        itemCount: _isSearchFieldEmpty
-                            ? _recentSearches.length
-                            : _nearbySuggestions.length,
-                        separatorBuilder: (context, index) =>
-                            const Divider(height: 1, indent: 70, color: Colors.black12),
-                        itemBuilder: (context, index) {
-                          final item = _isSearchFieldEmpty
-                              ? _recentSearches[index]
-                              : _nearbySuggestions[index];
-                          return _buildSearchItem(
-                            item['title'],
-                            item['subtitle'],
-                            MapVisuals.searchResultTypeIcon(item['type']),
-                            _isSearchFieldEmpty,
-                            item['lat'],
-                            item['lon'],
-                          );
-                        },
-                      ),
-              ),
-            ],
-          ),
-        ),
-      ),
+    return SmartResultsOverlay(
+      isSearchFieldEmpty: _isSearchFieldEmpty,
+      isLoading: _isLoading,
+      items: _isSearchFieldEmpty ? _recentSearches : _nearbySuggestions,
+      onItemTap: _onSearchItemTapped,
+      onClearHistory: _clearRecentSearches,
     );
   }
 
-  Widget _buildSearchItem(String title, String subtitle, IconData icon,
-      bool isRecent, double? lat, double? lon) {
-    return ListTile(
-      leading: Container(
-        width: 44,
-        height: 44,
-        decoration: BoxDecoration(
-            color: AppColors.lightSurface,
-            borderRadius: BorderRadius.circular(12)),
-        child: Icon(icon, color: AppColors.outline, size: 22),
-      ),
-      title: Text(title,
-          style: const TextStyle(
-              fontWeight: FontWeight.w600, color: AppColors.surface),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis),
-      subtitle: Text(subtitle,
-          style: const TextStyle(color: AppColors.outline, fontSize: 13),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis),
-      trailing: isRecent
-          ? const Icon(Icons.history, color: AppColors.chipBorder, size: 20)
-          : const Icon(Icons.north_west, color: AppColors.chipBorder, size: 20),
-      onTap: () async {
+  /// "Temizle" — kullanıcının kayıtlı arama geçmişini siler (prefs + ekran).
+  Future<void> _clearRecentSearches() async {
+    await _settingsService?.clearRecentMapSearches();
+    if (mounted) setState(() => _recentSearches = []);
+  }
+
+  // Arama sonucu/son arama satırına dokunulunca: konuma git + son aramayı kaydet.
+  // (Eski _buildSearchItem onTap gövdesi; sunum MapSearchItem'da, mantık burada.)
+  Future<void> _onSearchItemTapped(Map<String, dynamic> item) async {
+    final title = item['title'] as String;
+    final subtitle = item['subtitle'] as String;
+    final lat = item['lat'] as double?;
+    final lon = item['lon'] as double?;
+
+    setState(() {
+      _searchController.text = title;
+      _isSearchActive = false;
+    });
+    if (lat != null && lon != null) {
+      _mapController.move(LatLng(lat, lon), 16.0);
+      // Gerçek son aramalar listesine kaydet
+      final entry = {
+        'title': title,
+        'subtitle': subtitle,
+        'lat': lat,
+        'lon': lon,
+        'type': 'recent',
+      };
+      await _settingsService?.addRecentMapSearch(entry);
+      if (mounted) {
         setState(() {
-          _searchController.text = title;
-          _isSearchActive = false;
+          // Listeyi hemen güncelle (uygulama kapatılıp açılmadan gözükecek)
+          _recentSearches.removeWhere((e) => e['title'] == title);
+          _recentSearches.insert(0, {...entry, 'type': 'recent'});
+          if (_recentSearches.length > 5) _recentSearches.removeRange(5, _recentSearches.length);
         });
-        if (lat != null && lon != null) {
-          _mapController.move(LatLng(lat, lon), 16.0);
-          // Gerçek son aramalar listesine kaydet
-          final entry = {
-            'title': title,
-            'subtitle': subtitle,
-            'lat': lat,
-            'lon': lon,
-            'type': 'recent',
-          };
-          await _settingsService?.addRecentMapSearch(entry);
-          if (mounted) {
-            setState(() {
-              // Listeyi hemen güncelle (uygulama kapatılıp açılmadan gözükecek)
-              _recentSearches.removeWhere((e) => e['title'] == title);
-              _recentSearches.insert(0, {...entry, 'type': 'recent'});
-              if (_recentSearches.length > 5) _recentSearches.removeRange(5, _recentSearches.length);
-            });
-          }
-        }
-      },
-    );
+      }
+    }
   }
 
   // ─── Temel karo URL'si (harita türüne göre) ──────────────────────────────
@@ -1090,20 +1090,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     setState(() => _isLoadingOverpass = true);
 
     final center = _mapController.camera.center;
-    final south = (center.latitude  - 0.012).toStringAsFixed(6);
-    final north = (center.latitude  + 0.012).toStringAsFixed(6);
-    final west  = (center.longitude - 0.016).toStringAsFixed(6);
-    final east  = (center.longitude + 0.016).toStringAsFixed(6);
-    final bb    = '$south,$west,$north,$east';
-
-    // Kaldırımlar, yaya bölgeleri, parkur yolları
-    final query =
-        '[out:json][timeout:25];('
-        'way["highway"="footway"]($bb);'
-        'way["highway"="pedestrian"]($bb);'
-        'way["highway"="path"]["foot"!="no"]($bb);'
-        'way["highway"="steps"]($bb);'
-        ');out body;>;out skel qt;';
+    // Saf bbox + sorgu üretimi: lib/services/overpass_query_builder.dart (birim testli)
+    final bb = overpassBoundingBox(center.latitude, center.longitude,
+        latDelta: 0.012, lonDelta: 0.016);
+    final query = hikingOverpassQuery(bb);
 
     final url = Uri.parse(
       'https://overpass-api.de/api/interpreter?data=${Uri.encodeComponent(query)}',
@@ -1147,8 +1137,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             points: pts,
             // Merdiven: kırmızı  |  Yaya yolu: turuncu
             color: isSteps
-                ? const Color(0xFFE53935).withValues(alpha: 0.80)
-                : const Color(0xFFFF8F00).withValues(alpha: 0.75),
+                ? AppColors.mapSteps.withValues(alpha: 0.80)
+                : AppColors.mapFootway.withValues(alpha: 0.75),
             strokeWidth: isSteps ? 2.5 : 3.0,
             pattern: isSteps
                 ? StrokePattern.dashed(segments: const [6, 4])
@@ -1167,7 +1157,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   // ─── Overpass API: hissedilebilir yüzey & tekerlekli sandalye yolları ─────
   Future<void> _fetchOverpassLayer() async {
-    if (!_showTactile && !_showWheelchair && !_showElevator) {
+    if (!_showTactile && !_showWheelchair && !_showElevator && !_showParking) {
       setState(() {
         _accessibilityPolylines = [];
         _accessibilityMarkers   = [];
@@ -1178,37 +1168,17 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     setState(() => _isLoadingOverpass = true);
 
     final center = _mapController.camera.center;
-    final south = (center.latitude  - 0.015).toStringAsFixed(6);
-    final north = (center.latitude  + 0.015).toStringAsFixed(6);
-    final west  = (center.longitude - 0.020).toStringAsFixed(6);
-    final east  = (center.longitude + 0.020).toStringAsFixed(6);
-    final bb    = '$south,$west,$north,$east';
-
-    final buf = StringBuffer('[out:json][timeout:30];(');
-    // Way sorgusu — yollar / kaldırımlar (polyline)
-    if (_showTactile) {
-      buf.write('way["tactile_paving"="yes"]($bb);');
-    }
-    if (_showWheelchair) {
-      buf.write('way["wheelchair"="yes"]($bb);');
-      buf.write('way["wheelchair"="designated"]($bb);');
-    }
-    // Node sorgusu — tekil mekan noktaları (marker)
-    if (_showWheelchair) {
-      buf.write('node["wheelchair"="yes"]($bb);');
-      buf.write('node["wheelchair"="designated"]($bb);');
-    }
-    if (_showTactile) {
-      buf.write('node["tactile_paving"="yes"]($bb);');
-    }
-    if (_showElevator) {
-      buf.write('node["highway"="elevator"]($bb);');
-      buf.write('node["railway"="elevator"]($bb);');
-    }
-    buf.write(');out body;>;out skel qt;');
+    // Saf bbox + sorgu üretimi: lib/services/overpass_query_builder.dart (birim testli)
+    final bb = overpassBoundingBox(center.latitude, center.longitude,
+        latDelta: 0.015, lonDelta: 0.020);
+    final query = accessibilityOverpassQuery(bb,
+        tactile: _showTactile,
+        wheelchair: _showWheelchair,
+        elevator: _showElevator,
+        parking: _showParking);
 
     final url = Uri.parse(
-      'https://overpass-api.de/api/interpreter?data=${Uri.encodeComponent(buf.toString())}',
+      'https://overpass-api.de/api/interpreter?data=${Uri.encodeComponent(query)}',
     );
 
     try {
@@ -1248,9 +1218,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
           Color color;
           if (isWheelchair && _showWheelchair) {
-            color = const Color(0xFF1E88E5);  // Mavi — tekerlekli sandalye yolu
+            color = AppColors.mapWheelchair;  // Mavi — tekerlekli sandalye yolu
           } else if (isTactile && _showTactile) {
-            color = const Color(0xFF8E24AA);  // Mor — hissedilebilir yüzey yolu
+            color = AppColors.poiTactile;  // Mor — hissedilebilir yüzey yolu
           } else {
             continue;
           }
@@ -1271,23 +1241,32 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           if (lat == null || lon == null) continue;
 
           final tags = ((el['tags'] as Map?)?.cast<String, String>()) ?? {};
-          // Sadece gerçekten tag'li node'ları marker yap
-          final isWheelchairNode = (tags['wheelchair'] == 'yes' || tags['wheelchair'] == 'designated') && _showWheelchair;
+          // Sadece gerçekten tag'li node'ları marker yap.
+          // Engelli otoparkı, wheelchair=yes/designated tag'li de olabilir; bu
+          // yüzden parking kontrolü wheelchair'dan ÖNCE gelir (aksi hâlde
+          // otopark node'u tekerlekli sandalye markerı gibi görünürdü).
+          final isParkingNode    = (tags['amenity'] == 'parking' || tags['amenity'] == 'parking_space') &&
+              (tags['wheelchair'] == 'yes' || tags['wheelchair'] == 'designated') && _showParking;
+          final isWheelchairNode = !isParkingNode &&
+              (tags['wheelchair'] == 'yes' || tags['wheelchair'] == 'designated') && _showWheelchair;
           final isTactileNode    = tags['tactile_paving'] == 'yes' && _showTactile;
           final isElevator       = (tags['highway'] == 'elevator' || tags['railway'] == 'elevator') && _showElevator;
 
-          if (!isWheelchairNode && !isTactileNode && !isElevator) continue;
+          if (!isWheelchairNode && !isTactileNode && !isElevator && !isParkingNode) continue;
 
           Color markerColor;
           IconData markerIcon;
           if (isElevator) {
-            markerColor = const Color(0xFF00ACC1); // Cyan — asansör
+            markerColor = AppColors.mapElevator; // Cyan — asansör
             markerIcon  = Icons.elevator;
+          } else if (isParkingNode) {
+            markerColor = AppColors.mapParking; // İndigo — engelli otoparkı
+            markerIcon  = Icons.local_parking;
           } else if (isWheelchairNode) {
-            markerColor = const Color(0xFF1E88E5); // Mavi — tekerlekli sandalye mekanı
+            markerColor = AppColors.mapWheelchair; // Mavi — tekerlekli sandalye mekanı
             markerIcon  = Icons.accessible;
           } else {
-            markerColor = const Color(0xFF8E24AA); // Mor — hissedilebilir yüzey noktası
+            markerColor = AppColors.poiTactile; // Mor — hissedilebilir yüzey noktası
             markerIcon  = Icons.texture;
           }
 
@@ -1369,13 +1348,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 Row(
                   children: [
                     _buildMapTypeCard(setModalState, _MapType.defaultMap,
-                        'Varsayılan', Icons.map_outlined, const Color(0xFF4DB6AC)),
+                        'Varsayılan', Icons.map_outlined, AppColors.mapTypeDefault),
                     const SizedBox(width: 10),
                     _buildMapTypeCard(setModalState, _MapType.satellite,
-                        'Uydu', Icons.satellite_alt, const Color(0xFF546E7A)),
+                        'Uydu', Icons.satellite_alt, AppColors.mapTypeSatellite),
                     const SizedBox(width: 10),
                     _buildMapTypeCard(setModalState, _MapType.terrain,
-                        'Arazi', Icons.terrain, const Color(0xFF8D6E63)),
+                        'Arazi', Icons.terrain, AppColors.mapTypeTerrain),
                   ],
                 ),
                 const SizedBox(height: 20),
@@ -1392,27 +1371,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   children: [
                     _buildOverlayChip(
                       setModalState, 'transit', 'Toplu Taşıma',
-                      Icons.directions_transit_filled, const Color(0xFF00897B), _showTransit,
+                      Icons.directions_transit_filled, AppColors.mapTransit, _showTransit,
                     ),
                     _buildOverlayChip(
                       setModalState, 'cycling', 'Bisiklet',
-                      Icons.pedal_bike, const Color(0xFF43A047), _showCycling,
+                      Icons.pedal_bike, AppColors.mapCycling, _showCycling,
                     ),
                     _buildOverlayChip(
                       setModalState, 'hiking', 'Yürüyüş Yolları',
-                      Icons.directions_walk, const Color(0xFFFF8F00), _showHiking,
+                      Icons.directions_walk, AppColors.mapFootway, _showHiking,
                     ),
                     _buildOverlayChip(
                       setModalState, 'tactile', 'Hissedilebilir\nYüzey',
-                      Icons.texture, const Color(0xFF8E24AA), _showTactile,
+                      Icons.texture, AppColors.poiTactile, _showTactile,
                     ),
                     _buildOverlayChip(
                       setModalState, 'wheelchair', 'Tekerlekli\nSandalye',
-                      Icons.accessible_forward, const Color(0xFF1E88E5), _showWheelchair,
+                      Icons.accessible_forward, AppColors.mapWheelchair, _showWheelchair,
                     ),
                     _buildOverlayChip(
                       setModalState, 'elevator', 'Asansör',
-                      Icons.elevator, const Color(0xFF00ACC1), _showElevator,
+                      Icons.elevator, AppColors.mapElevator, _showElevator,
+                    ),
+                    _buildOverlayChip(
+                      setModalState, 'parking', 'Engelli\nOtoparkı',
+                      Icons.local_parking, AppColors.mapParking, _showParking,
                     ),
                   ],
                 ),
@@ -1424,53 +1407,33 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
   }
 
+  // Sunum MapTypeCard'a taşındı (lib/screens/map/map_type_card.dart);
+  // seçim (setState + setModalState) burada bağlanır. Row içinde olduğu için Expanded.
   Widget _buildMapTypeCard(StateSetter setModalState, _MapType type,
       String label, IconData icon, Color color) {
-    final selected = _mapType == type;
     return Expanded(
-      child: GestureDetector(
+      child: MapTypeCard(
+        label: label,
+        icon: icon,
+        color: color,
+        selected: _mapType == type,
         onTap: () {
           setState(() => _mapType = type);
           setModalState(() {});
         },
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              height: 76,
-              decoration: BoxDecoration(
-                color: selected
-                    ? color.withValues(alpha: 0.18)
-                    : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: selected ? color : Colors.grey.shade200,
-                  width: selected ? 2.5 : 1.5,
-                ),
-              ),
-              child: Center(
-                child: Icon(icon,
-                    color: selected ? color : Colors.grey.shade400, size: 34),
-              ),
-            ),
-            const SizedBox(height: 6),
-            Text(label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: selected ? FontWeight.w700 : FontWeight.w500,
-                color: selected ? color : Colors.grey.shade600,
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
 
+  // Sunum MapOverlayChip'e taşındı (lib/screens/map/map_overlay_chip.dart);
+  // bayrak toggle + Overpass katman çekme (yan etki) burada kalır.
   Widget _buildOverlayChip(StateSetter setModalState, String key, String label,
       IconData icon, Color color, bool isActive) {
-    return GestureDetector(
+    return MapOverlayChip(
+      label: label,
+      icon: icon,
+      color: color,
+      isActive: isActive,
       onTap: () {
         setState(() {
           switch (key) {
@@ -1496,50 +1459,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               _showElevator = !_showElevator;
               _fetchOverpassLayer();
               break;
+            case 'parking':
+              _showParking = !_showParking;
+              _fetchOverpassLayer();
+              break;
           }
         });
         setModalState(() {});
       },
-      child: SizedBox(
-        width: 68,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 150),
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: isActive ? color.withValues(alpha: 0.18) : Colors.grey.shade50,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: isActive ? color : Colors.grey.shade200,
-                  width: isActive ? 2 : 1,
-                ),
-              ),
-              child: Center(
-                child: Icon(icon,
-                    color: isActive ? color : Colors.grey.shade400, size: 28),
-              ),
-            ),
-            const SizedBox(height: 5),
-            Text(label,
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
-                color: isActive ? color : Colors.grey.shade600,
-                height: 1.2,
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 
   // ─── Overpass + Foursquare hibrit POI çekme ───────────────────────────────
-  void _fetchPoisForVisibleArea(LatLngBounds bounds) {
+  // [immediate] true ise 800ms debounce atlanır (ilk açılış / onMapReady için).
+  void _fetchPoisForVisibleArea(LatLngBounds bounds, {bool immediate = false}) {
     final center = bounds.center;
 
     // Bounding box köşegen yarıçapını metre cinsinden hesapla (Foursquare için)
@@ -1550,41 +1483,190 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
     final radiusMeters = (diagonalMeters / 2).round().clamp(300, 3000);
 
-    // Yükleniyor göster
+    // Filtre seçili değilse 21/12 kategorinin TAMAMI yerine sık kullanılan 7
+    // kategoriyle sorgula — Overpass/Foursquare yanıtı çok daha hızlı, kota korunur.
+    final effectiveCategories = _selectedPoiCategories.isEmpty
+        ? OverpassPoiService.quickFilterCategories.toSet()
+        : _selectedPoiCategories;
+
+    // Üç kaynak ayrı biter; gösterge hepsi bitince kapanır. Taban katmanı
+    // (fsq_os) yalnızca backend yapılandırılmışsa yüklenir.
+    _overpassLoading = true;
+    _fsqLoading = true;
+    _fsqOsLoading = _fsqPoiService.isEnabled;
     if (mounted) setState(() => _isLoadingPois = true);
+
+    void syncLoading() {
+      if (mounted) {
+        setState(() =>
+            _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading);
+      }
+    }
+
+    void onOverpassResult(List<OsmPoi> overpassPois) {
+      if (!mounted) return;
+      _overpassLoading = false;
+      // _osmPois (canlı Foursquare + taban) öncelikli; Overpass boşlukları doldurur
+      final merged = MapVisuals.mergePois(_osmPois, overpassPois);
+      setState(() {
+        _osmPois = merged;
+        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+      });
+    }
+
+    void onOverpassLoading(bool loading) {
+      _overpassLoading = loading;
+      syncLoading();
+    }
+
+    void onFsqResult(List<OsmPoi> fsqPois) {
+      if (!mounted) return;
+      _fsqLoading = false;
+      // Canlı Foursquare en güncel veriyi verir → en yüksek öncelik
+      final merged = MapVisuals.mergePois(fsqPois, _osmPois);
+      setState(() {
+        _osmPois = merged;
+        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+      });
+    }
+
+    void onFsqLoading(bool loading) {
+      _fsqLoading = loading;
+      syncLoading();
+    }
+
+    void onFsqOsResult(List<OsmPoi> basePois) {
+      if (!mounted) return;
+      _fsqOsLoading = false;
+      // Taban katmanı boşlukları doldurur → mevcut (_osmPois) öncelikli kalır
+      final merged = MapVisuals.mergePois(_osmPois, basePois);
+      setState(() {
+        _osmPois = merged;
+        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+      });
+    }
+
+    void onFsqOsLoading(bool loading) {
+      _fsqOsLoading = loading;
+      syncLoading();
+    }
+
+    if (immediate) {
+      // Debounce atla — doğrudan çek (ilk yükleme gecikmesini kaldırır)
+      _overpassPoiService.fetchPoisForBounds(
+        bounds: bounds,
+        selectedCategories: effectiveCategories,
+        onResult: onOverpassResult,
+        onLoadingChanged: onOverpassLoading,
+      );
+      _foursquareService.fetchNearby(
+        centerLat: center.latitude,
+        centerLon: center.longitude,
+        selectedCategories: effectiveCategories,
+        radiusMeters: radiusMeters,
+        onResult: onFsqResult,
+        onLoadingChanged: onFsqLoading,
+      );
+      _fsqPoiService.fetchForBounds(
+        bounds: bounds,
+        selectedCategories: effectiveCategories,
+        onResult: onFsqOsResult,
+        onLoadingChanged: onFsqOsLoading,
+      );
+      return;
+    }
 
     // Overpass: debounce ile (küçük haritalar + yollar için)
     _overpassPoiService.debouncedFetch(
       bounds: bounds,
-      selectedCategories: _selectedPoiCategories,
-      onResult: (overpassPois) {
-        if (!mounted) return;
-        // Foursquare zaten çekildiyse birleştir
-        final merged = MapVisuals.mergePois(_osmPois, overpassPois);
-        setState(() => _osmPois = merged);
-      },
-      onLoadingChanged: (_) {}, // Foursquare ile ortak loading kullanıyoruz
+      selectedCategories: effectiveCategories,
+      onResult: onOverpassResult,
+      onLoadingChanged: onOverpassLoading,
     );
 
     // Foursquare: güncel iş yeri verisi için (debounce ayrı, paralel çalışır)
     _foursquareService.debouncedFetch(
       centerLat: center.latitude,
       centerLon: center.longitude,
-      selectedCategories: _selectedPoiCategories,
+      selectedCategories: effectiveCategories,
       radiusMeters: radiusMeters,
-      onResult: (fsqPois) {
-        if (!mounted) return;
-        // Overpass ile birleştir, Foursquare öncelikli
-        final merged = MapVisuals.mergePois(fsqPois, _osmPois);
-        setState(() {
-          _osmPois = merged;
-          _isLoadingPois = false;
-        });
-      },
-      onLoadingChanged: (loading) {
-        if (mounted && loading) setState(() => _isLoadingPois = true);
-      },
+      onResult: onFsqResult,
+      onLoadingChanged: onFsqLoading,
     );
+
+    // Taban katmanı (Türkiye geneli): en geniş kapsam, istek başına ücretsiz
+    _fsqPoiService.debouncedFetch(
+      bounds: bounds,
+      selectedCategories: effectiveCategories,
+      onResult: onFsqOsResult,
+      onLoadingChanged: onFsqOsLoading,
+    );
+  }
+
+  // ─── OSM POI: Google tarzı kademeli marker üretimi ──────────────────────
+  // _osmPois'i ekran-uzayına projekte edip declutter'a verir; sonuca göre
+  // her POI'yi isim (PoiMarker) / nokta (PoiDot) olarak çizer, gizlileri atlar.
+  List<Marker> _buildPoiMarkers() {
+    final camera = _mapController.camera;
+
+    // Öncelik sırasına göre kırp (çok yoğun bölgelerde relayout'u sınırla).
+    var indices = List<int>.generate(_osmPois.length, (i) => i);
+    if (indices.length > _poiDeclutterCap) {
+      indices.sort(
+          (a, b) => poiPriority(_osmPois[b].amenityType)
+              .compareTo(poiPriority(_osmPois[a].amenityType)));
+      indices = indices.sublist(0, _poiDeclutterCap);
+    }
+
+    // Ekran-uzayı declutter girdileri (zoom eşikleriyle kademeli görünürlük).
+    final zoom = camera.zoom;
+    final items = <DeclutterItem>[];
+    for (final i in indices) {
+      final poi = _osmPois[i];
+      final anchor = camera
+          .latLngToScreenOffset(LatLng(poi.latitude, poi.longitude));
+      final pr = poiPriority(poi.amenityType);
+      items.add(DeclutterItem(
+        id: i,
+        anchor: anchor,
+        priority: pr,
+        canLabel: zoom >= poiLabelMinZoom(pr),
+        canDot: zoom >= poiDotMinZoom(pr),
+        labelSize: Size(_estimateLabelWidth(poi), PoiMarker.height),
+      ));
+    }
+
+    final modes = declutterPois(items, viewport: camera.size);
+
+    final markers = <Marker>[];
+    for (final i in indices) {
+      final mode = modes[i];
+      if (mode == null || mode == PoiRenderMode.hidden) continue;
+      final poi = _osmPois[i];
+      final isSelected = _selectedOsmPoi?.uniqueKey == poi.uniqueKey;
+      // Seçili POI çakışmada gizlenmiş olsa bile isim olarak gösterilsin.
+      final asLabel = mode == PoiRenderMode.label || isSelected;
+      markers.add(Marker(
+        point: LatLng(poi.latitude, poi.longitude),
+        width: asLabel ? PoiMarker.width : PoiDot.size,
+        height: asLabel ? PoiMarker.height : PoiDot.size,
+        child: GestureDetector(
+          onTap: () => _onOsmPoiTapped(poi),
+          child: asLabel
+              ? PoiMarker(poi: poi, isSelected: isSelected)
+              : PoiDot(poi: poi),
+        ),
+      ));
+    }
+    return markers;
+  }
+
+  // İsim etiketinin yaklaşık genişliği (px) — declutter çakışma kutusu için.
+  // TextPainter yerine karakter tabanlı ucuz tahmin (her relayout'ta çalışır).
+  double _estimateLabelWidth(OsmPoi poi) {
+    final label = poi.name.isEmpty ? poi.category : poi.name;
+    // fontSize 10, w600 ≈ 6px/karakter + ikon/padding payı; 28–140 arası kırp.
+    return (label.length * 6.0 + 24).clamp(28.0, 140.0);
   }
 
   // ─── OSM POI: Tıklanan POI'yi bul (yakınlık kontrolü) ────────────────────
@@ -1665,10 +1747,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
           });
           // Kategori değiştiğinde cache'i temizle ve yeniden çek
           _overpassPoiService.clearCache();
-          // Zoom < 15 ise önce 15'e yaklaştır (POI'ler görünsün), sonra çek
-          if (_currentZoom < 15) {
-            _mapController.move(_mapController.camera.center, 15.0);
-            setState(() => _currentZoom = 15.0);
+          // Zoom eşiğin altındaysa önce eşiğe yaklaştır (POI'ler görünsün), sonra çek
+          if (_currentZoom < _poiFetchMinZoom) {
+            _mapController.move(_mapController.camera.center, _poiFetchMinZoom);
+            setState(() => _currentZoom = _poiFetchMinZoom);
           }
           final bounds = _mapController.camera.visibleBounds;
           _fetchPoisForVisibleArea(bounds);

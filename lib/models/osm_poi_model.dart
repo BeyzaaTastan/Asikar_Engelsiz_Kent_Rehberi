@@ -311,6 +311,10 @@ class OsmPoi {
   /// Benzersiz anahtar — haritadaki marker cache için.
   String get uniqueKey => '${osmType}_$osmId';
 
+  /// POI'nin Foursquare kaynaklı olup olmadığı (canlı API v3 veya OS Places).
+  /// Atıf seçimi tek yerden: [SheetAttributionLine] / [MapAttributionBadge].
+  bool get isFoursquare => osmType == 'foursquare' || osmType == 'fsq_os';
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||

@@ -1,0 +1,20 @@
+# Release imzalama yapılandırması — ŞABLON.
+# Bu dosyayı `android/key.properties` olarak kopyalayıp gerçek değerlerle doldurun.
+# GERÇEK `key.properties` ve `*.jks` repoya GİRMEZ (.gitignore'da kilitli).
+#
+# 1) Keystore üret (bir kez):
+#    keytool -genkey -v -keystore C:/keystores/asikar-release.jks \
+#      -keyalg RSA -keysize 2048 -validity 10000 -alias asikar
+#
+# 2) Üretilen .jks dosyasını ve aşağıdaki şifreleri EN AZ 2 GÜVENLİ YERDE yedekleyin
+#    (örn. şifre yöneticisi + çevrimdışı şifreli kopya). Kaybı = Play Store
+#    güncellemesi İMKANSIZ — geri alınamaz risk (bkz. vault/13-Recovery.md).
+#
+# 3) Yayın için ayrıca: applicationId'yi gerçek paket adına çevirin ve uygulamayı
+#    Firebase Console + Play Console'da bu paket adıyla kaydedin
+#    (google-services.json eşleşmeli), SHA-256'yı App Check Play Integrity'ye ekleyin.
+
+storePassword=DEGISTIR
+keyPassword=DEGISTIR
+keyAlias=asikar
+storeFile=C:/keystores/asikar-release.jks

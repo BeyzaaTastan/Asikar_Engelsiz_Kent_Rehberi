@@ -37,7 +37,7 @@ bağımlılıklar: [[06-Bulut]], [[01-On-Yuz]], [[07-CI-CD]]
 - Play Store yayını için gizlilik politikası URL'i gerekiyor; nerede barındırılacak? (Firebase Hosting'de statik sayfa olabilir)
 
 ## TODO
-- [ ] Android imzalama anahtarı (keystore) oluştur ve güvenli sakla (kaybolursa güncelleme yapılamaz)
+- [~] **Android release imzalama** — *2026-06-29 (K2):* `build.gradle.kts` artık `key.properties` deseniyle gerçek release anahtarını okuyor, yoksa debug'a düşüyor (`signingReport` ile doğrulandı; şablon `android/key.properties.example`). **Kalan ops (kullanıcı):** (1) `keytool` ile keystore üret + `key.properties` doldur, (2) `applicationId`'yi `com.example.*`'tan gerçek paket adına çevir + Firebase Console/Play Console'da yeniden kaydet (google-services.json eşleşmesi) + SHA-256'yı App Check Play Integrity'ye ekle, (3) keystore'u 2 güvenli yere yedekle (bkz. [[13-Recovery]], [[08-Guvenlik]] Faz 5).
 - [ ] Gizlilik politikası + KVKK metnini statik sayfa olarak Firebase Hosting'e koy
 - [ ] iOS yayın kararını [[Architecture-Overview]] önceliğiyle netleştir
 - [ ] `flutter build web` çıktısını test ortamında doğrula

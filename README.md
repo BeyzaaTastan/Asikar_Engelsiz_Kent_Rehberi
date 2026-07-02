@@ -1,6 +1,6 @@
 # Aşikar Engelsiz Kent Rehberi
 
-Sakarya'ya odaklı, engelli bireyleri gönüllülerle buluşturan **Flutter + Firebase** mobil erişilebilirlik uygulaması. Bitirme projesi; düşük bütçe (ücretsiz/düşük katmanlar) hedefi.
+Engelli bireyleri gönüllülerle buluşturan **Flutter + Firebase** mobil erişilebilirlik uygulaması. **Gerçek ürün / canlı production:** Sakarya'da **pilot** olarak sahaya çıkar, **Türkiye geneli** kullanıma açılır. Altyapıda kalıcı **$0/düşük katman** maliyet disiplini (bilinçli tercih).
 
 - **Özel Gereksinimli birey** → tek tuşla gönüllüye **görüntülü** bağlanır (Agora + FCM).
 - **Gönüllü** → çağrıyı push bildirimi ile alır, görüntülü destek verir.
@@ -86,4 +86,4 @@ Sunucusuz (serverless) + BaaS. Kendi sunucumuz yok; client çoğunlukla doğruda
 
 ## Lisans / Bağlam
 
-Bitirme projesi (Beyza Taştan) — Sakarya, Türkiye. Uygulama arayüzü Türkçe.
+Gerçek ürün / canlı production. Sakarya pilotu → Türkiye geneli. Uygulama arayüzü Türkçe.

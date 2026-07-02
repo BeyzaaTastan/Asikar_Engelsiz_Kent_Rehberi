@@ -32,6 +32,7 @@ Güvenlik üç hatta savunulur:
 
 ### 3. Sunucu tarafı kimlik + uygulama kapısı
 - `generateAgoraToken`: `context.auth` yoksa reddeder → anonim kullanıcı görüntülü görüşmeye giremez.
+- **Katılımcı doğrulaması (mahremiyet kapısı — *2026-06-29*):** Token üretiminden önce `cagrilar/{channelName}` admin SDK ile okunur; yalnızca çağrının katılımcısına (`caller_uid` ya da `volunteer_uid`) ve çağrı aktifken (`bekliyor|cevaplandi`) token verilir, aksi halde `permission-denied`. **Neden:** Auth+AppCheck tek başına yetmiyordu — `cagrilar` okuma tüm kullanıcılara açık olduğundan (`firestore.rules` `:254`) kanal adı enumerasyonuyla 3. taraf görüşmeye girebilirdi (özel nitelikli konum/engellilik verisi ifşası). Durum makinesiyle (`bekliyor→cevaplandi`) hizalı (bkz. [[03-Veritabani]], [[02-API-Arka-Uc]]). **Deploy gerekli.**
 - **App Check:** İstemci `main.dart`'ta `FirebaseAppCheck.instance.activate` ile etkinleşir (debug→debug provider, release→Android Play Integrity / iOS DeviceCheck). `generateAgoraToken`, `APP_CHECK_ENFORCE=true` iken `context.app` yoksa reddeder → **yalnızca gerçek uygulama** token alabilir, sahte/script istemci Agora dakikalarını yakamaz (bkz. [[09-Rate-Limiting]]).
   - **Güvenli kullanıma alma:** Bayrak önce `false` (Console'da metrik izle) → meşru trafik token taşıyınca `true`. Bayrak yokken zorlama yapılmaz (uygulama kırılmaz).
   - **ENFORCE AKTİF — *2026-06-28*:** `APP_CHECK_ENFORCE=true` yapıldı + functions deploy edildi. `generateAgoraToken` artık App Check token'ı olmayan istekleri reddediyor. Debug cihaz token'ı (`6d5dd0ce-…`) Console'a kayıtlı → debug build çalışır.
@@ -59,12 +60,15 @@ Güvenlik üç hatta savunulur:
 
 ## Açık Sorular
 - ~~**App Check** olmadan biri token fonksiyonunu otomatik çağırıp dakika tüketebilir.~~ **ÇÖZÜLDÜ — ENFORCE AKTİF + DOĞRULANDI** (*2026-06-28*): istemci + sunucu zorlaması (`APP_CHECK_ENFORCE=true`, deploy) + Firestore Console Enforce + debug token kayıtlı; debug build çağrı testi geçti (`app:VALID`). Açık kalan: yalnızca release için Play Integrity kurulumu (Faz 5).
-- KVKK: konum + engellilik durumu **özel nitelikli kişisel veri**. Açık rıza, saklama süresi, silme talebi akışı var mı? (silme yasak ile çelişiyor!)
+- ~~`generateAgoraToken` katılımcı doğrulaması yapmıyordu → 3. taraf görüşmeye girebilirdi (denetim 2026-06-29, K1).~~ **ÇÖZÜLDÜ (kodda, *2026-06-29*):** çağrı belgesi okunup katılımcı + aktif-durum kontrolü eklendi (madde 3). **Deploy gerekli** (`firebase deploy --only functions`). Kalan ilişkili: `cagrilar` okuma hâlâ tüm auth'lı kullanıcılara açık (`firestore.rules:254`) — token kapısı bunu artık sömürülemez kılıyor ama `caller_name/uid` ifşası sürüyor (D2, düşük öncelik).
+- KVKK: konum + engellilik durumu **özel nitelikli kişisel veri**. Açık rıza, saklama süresi, silme talebi akışı var mı? (silme yasak ile çelişiyor!) — Not: harita açılışında konum **izni dayatılmaz** (yalnızca önceden verilmişse kullanılır, `_initLocationOnStart`) ve konum **loglanmaz** (bkz. [[01-On-Yuz]] · "Açılışta kullanıcı konumu").
 - KVKK ↔ gözlemlenebilirlik: Crashlytics + Analytics eklendi (*2026-06-28*, bkz. [[12-Loglama]]). Teknik tarafta veri **anonim** (parametresiz event, `setUserIdentifier` yok, debug'da toplama kapalı) ama **aydınlatma/rıza metninde bu veri toplama bildirilmeli.**
 - Yorumlarda hakaret/yanlış erişilebilirlik bilgisi → moderasyon yokken sorumluluk kimde?
 - `.env` mobil binary'den çıkarılabilir; Foursquare key sızarsa kota riski.
+- **Sesli arama (*2026-07-02*):** mikrofon sesi cihazın **OS konuşma tanıyıcısına** gider (Android/iOS platform servisi, ör. Google/Apple); uygulama sesi **saklamaz/loglamaz**. İzin `RECORD_AUDIO` (+`<queries>` RecognitionService) / iOS `NSSpeechRecognitionUsageDescription` ile kapılı. **KVKK:** aydınlatma metni OS tanıyıcının veri işlemesini de belirtmeli (bkz. [[01-On-Yuz]] · "Sesli arama").
 
 ## TODO
+- [x] **`generateAgoraToken` katılımcı doğrulaması** (çağrı belgesi + `caller_uid`/`volunteer_uid` + aktif durum kontrolü) — *2026-06-29* (K1); ⚠️ **canlıya deploy edilmeli** (`firebase deploy --only functions`)
 - [x] **Firebase App Check** entegre et (istemci `activate` + `generateAgoraToken` env-bayraklı zorlama) — *2026-06-28*
 - [x] App Check'i Console'da kaydet + debug token ekle + `APP_CHECK_ENFORCE=true` + functions deploy — *2026-06-28*
 - [x] Firestore App Check enforce'u Console'dan aç (App Check → APIs → Cloud Firestore → Enforce) — *2026-06-28*; debug build çağrı testiyle doğrulandı (`app:VALID`, status 200)
@@ -74,9 +78,10 @@ Güvenlik üç hatta savunulur:
   - [ ] Release imzalama anahtarının **SHA-256** parmak izini al (`keytool -list -v -keystore <release.keystore>`) ve Firebase Console → Project Settings → Android app'e ekle
   - [ ] Firebase Console → App Check → Android app → **Play Integrity** sağlayıcısını etkinleştir
   - [ ] Bir internal/closed test track'i ile release build'de `generateAgoraToken` token akışını doğrula (debug'daki `app:VALID` doğrulamasının release karşılığı)
+- [x] **Foursquare 3. parti lisans/atıf uyumu:** FSQ verisi gösterilen her yüzeyde "Powered by Foursquare" görünür atıf (harita köşe rozeti + POI detay paneli); OS Places (Apache-2.0) NOTICE + telif satırı `cloudflare/poi-worker/README.md`'de korundu; OSM için ayrı ODbL atfı. Tek kaynak `lib/screens/map/map_attribution.dart` — *2026-07-02* (bkz. [[10-Cache-CDN]], [[09-Rate-Limiting]])
 - [ ] Node.js 20 runtime → daha yeni sürüme yükselt (2026-10-30'da decommission, bkz. [[02-API-Arka-Uc]])
 - [ ] KVKK: aydınlatma metni + rıza + "verimi sil" talebi süreci (silme yasağıyla uyumlu çözüm: anonimleştirme) — aydınlatma metni **Crashlytics + Analytics** veri toplamayı da kapsamalı (bkz. [[12-Loglama]])
-- [ ] Firestore kurallarını emulator ile test et → [[07-CI-CD]]
+- [x] Firestore kurallarını emulator ile test et (Faz 2 — `isCagriClaim` ikinci gönüllü reddi + `isCagriTimeout` + guard'lar; 10 senaryo, `test/firestore-rules/`, `bash tool/run_rules_tests.sh`) — *2026-06-28* → [[07-CI-CD]], [[03-Veritabani]]
 - [ ] Yorum için basit moderasyon (küfür filtresi / şikayet butonu) değerlendir
 - [ ] `.gitignore` sır kapsamını doğrula
 

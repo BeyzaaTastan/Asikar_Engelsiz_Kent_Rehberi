@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'registration_complete_screen.dart';
+import '../router/app_router.dart';
 import '../models/user_model.dart';
 import '../services/database_service.dart';
 
@@ -60,12 +60,11 @@ class _VolunteerSkillsScreenState extends State<VolunteerSkillsScreen> {
 
       // Başarılıysa yönlendir
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
+        Navigator.pushNamedAndRemoveUntil(
           context,
-          MaterialPageRoute(
-            builder: (context) => const RegistrationCompleteScreen(isVolunteer: true),
-          ),
+          AppRoutes.registrationComplete,
           (route) => false,
+          arguments: {'isVolunteer': true},
         );
       }
     } catch (e) {

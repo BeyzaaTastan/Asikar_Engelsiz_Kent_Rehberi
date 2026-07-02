@@ -55,6 +55,18 @@ functions/.env.local
 *analyze.txt
 *out.txt
 
+# Firestore rules test runner (Node)
+test/firestore-rules/node_modules/
+firestore-debug.log
+firebase-debug.log
+
+# POI pipeline + Cloudflare Worker artefaktları
+tools/poi_pipeline/*.db
+tools/poi_pipeline/pois_with_tiles.json
+tools/poi_pipeline/tiles/
+cloudflare/poi-worker/node_modules/
+cloudflare/poi-worker/.wrangler/
+
 # Firebase Secrets
 android/app/google-services.json
 ios/Runner/GoogleService-Info.plist

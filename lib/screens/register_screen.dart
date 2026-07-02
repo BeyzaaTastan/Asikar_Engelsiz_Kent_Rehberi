@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../main_wrapper.dart';
+import '../router/app_router.dart';
 import '../constants/app_colors.dart';
 
 class RegisterScreen extends StatefulWidget {
@@ -66,8 +66,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         messenger.showSnackBar(
           const SnackBar(content: Text('Kayıt Başarılı! Aşikar\'a hoş geldiniz.')),
         );
-        navigator.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const MainWrapper()),
+        navigator.pushNamedAndRemoveUntil(
+          AppRoutes.mainWrapper,
           (route) => false,
         );
       }
@@ -97,8 +97,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
         messenger.showSnackBar(
           const SnackBar(content: Text('Google ile Giriş Başarılı!')),
         );
-        navigator.pushAndRemoveUntil(
-          MaterialPageRoute(builder: (context) => const MainWrapper()),
+        navigator.pushNamedAndRemoveUntil(
+          AppRoutes.mainWrapper,
           (route) => false,
         );
       } else {
@@ -231,7 +231,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         'Engelsiz şehir rehberi için tüm alanlar erişilebilirlik standartlarına uygundur.',
                                         style: TextStyle(
                                           fontSize: 11,
-                                          color: Color(0xFF006B79),
+                                          color: AppColors.infoDarkTeal,
                                           fontWeight: FontWeight.w500,
                                           height: 1.3,
                                         ),

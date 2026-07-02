@@ -3,7 +3,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../constants/app_colors.dart';
 import '../../models/venue_model.dart';
-import '../route_screen.dart';
+import '../../router/app_router.dart';
 import 'map_action_button.dart';
 import 'map_visuals.dart';
 
@@ -135,15 +135,14 @@ class VenueSheet extends StatelessWidget {
                       icon: Icons.directions,
                       label: 'Yol Tarifi',
                       color: AppColors.primary,
-                      onTap: () => Navigator.push(
+                      onTap: () => Navigator.pushNamed(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => RouteScreen(
-                            destinationName: venue.name,
-                            destinationLocation:
-                                LatLng(venue.latitude, venue.longitude),
-                          ),
-                        ),
+                        AppRoutes.routeScreen,
+                        arguments: {
+                          'destinationName': venue.name,
+                          'destinationLocation':
+                              LatLng(venue.latitude, venue.longitude),
+                        },
                       ),
                     ),
                     const SizedBox(width: 12),

@@ -1,8 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
-
-import 'accessibility_prefs_screen.dart';
-import 'volunteer_status_screen.dart';
+import '../router/app_router.dart';
 
 class InterestsScreen extends StatefulWidget {
   final String userType;
@@ -149,24 +147,22 @@ class _InterestsScreenState extends State<InterestsScreen> {
                 ? null
                 : () {
                     if (widget.userType == 'Özel Gereksinimli') {
-                      Navigator.push(
+                      Navigator.pushNamed(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => AccessibilityPrefsScreen(
-                            userType: widget.userType,
-                            selectedInterests: _selectedInterests,
-                          ),
-                        ),
+                        AppRoutes.accessibilityPrefs,
+                        arguments: {
+                          'userType': widget.userType,
+                          'selectedInterests': _selectedInterests,
+                        },
                       );
                     } else {
-                      Navigator.push(
+                      Navigator.pushNamed(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => VolunteerStatusScreen(
-                            userType: widget.userType,
-                            selectedInterests: _selectedInterests,
-                          ),
-                        ),
+                        AppRoutes.volunteerStatus,
+                        arguments: {
+                          'userType': widget.userType,
+                          'selectedInterests': _selectedInterests,
+                        },
                       );
                     }
                   },

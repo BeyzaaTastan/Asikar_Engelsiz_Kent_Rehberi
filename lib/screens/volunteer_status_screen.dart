@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'volunteer_skills_screen.dart';
-import 'registration_complete_screen.dart';
+import '../router/app_router.dart';
 import '../models/user_model.dart';
 import '../services/database_service.dart';
 
@@ -41,12 +40,11 @@ class _VolunteerStatusScreenState extends State<VolunteerStatusScreen> {
       await DatabaseService().saveUserSurvey(newUser);
 
       if (mounted) {
-        Navigator.pushAndRemoveUntil(
+        Navigator.pushNamedAndRemoveUntil(
           context,
-          MaterialPageRoute(
-            builder: (context) => const RegistrationCompleteScreen(isVolunteer: false),
-          ),
+          AppRoutes.registrationComplete,
           (route) => false,
+          arguments: {'isVolunteer': false},
         );
       }
     } catch (e) {
@@ -201,12 +199,14 @@ class _VolunteerStatusScreenState extends State<VolunteerStatusScreen> {
                       ),
                       onPressed: _isLoading ? null : () {
                         debugPrint("Kullanıcı gönüllü olmak istiyor!");
-                        Navigator.push(context, MaterialPageRoute(
-                          builder: (context) => VolunteerSkillsScreen(
-                            userType: widget.userType, 
-                            selectedInterests: widget.selectedInterests
-                          ),
-                        ));
+                        Navigator.pushNamed(
+                          context,
+                          AppRoutes.volunteerSkills,
+                          arguments: {
+                            'userType': widget.userType,
+                            'selectedInterests': widget.selectedInterests,
+                          },
+                        );
                       },
                     ),
                   ),

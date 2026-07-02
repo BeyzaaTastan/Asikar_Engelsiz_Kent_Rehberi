@@ -10,6 +10,8 @@ import '../screens/volunteer_status_screen.dart';
 import '../screens/volunteer_skills_screen.dart';
 import '../screens/registration_complete_screen.dart';
 import '../screens/route_screen.dart';
+import '../screens/venue/add_venue_screen.dart';
+import '../screens/venue/venue_detail_screen.dart';
 import '../main_wrapper.dart';
 
 /// Uygulamadaki tüm route isimlerini barındıran sabit sınıf.
@@ -28,6 +30,8 @@ class AppRoutes {
   static const String volunteerSkills = '/volunteer-skills';
   static const String registrationComplete = '/registration-complete';
   static const String routeScreen = '/route';
+  static const String addVenue = '/add-venue';
+  static const String venueDetail = '/venue-detail';
 }
 
 /// Merkezi route üretici — MaterialApp.onGenerateRoute ile kullanılır.
@@ -99,6 +103,17 @@ class AppRouter {
           builder: (_) => RouteScreen(
             destinationName: args['destinationName'] as String,
             destinationLocation: args['destinationLocation'] as dynamic,
+          ),
+        );
+
+      case AppRoutes.addVenue:
+        return MaterialPageRoute(builder: (_) => const AddVenueScreen());
+
+      case AppRoutes.venueDetail:
+        final args = settings.arguments as Map<String, dynamic>;
+        return MaterialPageRoute(
+          builder: (_) => VenueDetailScreen(
+            venueId: args['venueId'] as String,
           ),
         );
 

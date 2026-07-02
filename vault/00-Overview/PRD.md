@@ -21,7 +21,7 @@ PRD, "ne inşa ediyoruz"u tek bir referans noktasına bağlar; aksi halde her ek
 
 ### Fonksiyonel gereksinimler (MVP)
 1. **Kimlik:** E-posta + Google ile giriş; kullanıcı tipi seçimi zorunlu (bkz. [[04-Auth]]).
-2. **Çağrı:** Engelli kullanıcı UUID'li çağrı oluşturur → `cagrilar` koleksiyonu → Cloud Function FCM topic'e yollar (bkz. [[02-API-Arka-Uc]]).
+2. **Çağrı:** Engelli kullanıcı UUID'li çağrı oluşturur → `cagrilar` koleksiyonu → Cloud Function FCM topic'e yollar (bkz. [[02-API-Arka-Uc]]). **Çağrı tipi yönlendirmesi (2026-07-02):** Çağrı, **fiziksel yardım / yerinde şehir rehberliği** mi yoksa **uzaktan (yalnızca görüntülü)** destek mi olduğunu taşır. *Fiziksel* çağrı yalnızca **aynı şehirdeki** gönüllülere düşer (yerinde bulunmak gerekir); *uzaktan* çağrı **konumdan bağımsız** her yerdeki gönüllülere düşebilir. Bu, hem doğru eşleştirme hem de Türkiye geneli ölçek için FCM topic segmentasyonunun ürün gerekçesidir (bkz. [[11-Olcekleme]]).
 3. **Görüntülü görüşme:** Agora kanalına her iki taraf katılır; token sunucudan alınır (bkz. [[08-Guvenlik]]). **Zaman aşımı:** 45 sn içinde gönüllü gelmezse çağrı `zaman_asimi` olur, arayana "gönüllü bulunamadı" gösterilir (bkz. [[02-API-Arka-Uc]]).
 4. **Mekân & skor:** Mekân ekleme + yorum → transaction ile skor yeniden hesaplanır (bkz. [[03-Veritabani]]).
 5. **POI keşfi:** Harita üzerinde Foursquare + Overpass POI'leri; kategori filtresi (bkz. [[10-Cache-CDN]]).
@@ -31,8 +31,9 @@ PRD, "ne inşa ediyoruz"u tek bir referans noktasına bağlar; aksi halde her ek
 ### Fonksiyonel olmayan gereksinimler
 - **Erişilebilirlik:** Tüm kritik butonlarda `Semantics` etiketi; TalkBack/VoiceOver ile kullanılabilir olmalı.
 - **Gecikme:** Çağrı oluşturma → gönüllü telefonunun çalması hedefi < 5 sn (FCM `priority: high`, `ttl: 30s`).
-- **Maliyet:** Aylık altyapı maliyeti ~0 ₺ hedefi (ücretsiz katmanlar — bkz. [[06-Bulut]]).
+- **Maliyet:** Aylık altyapı maliyeti kalıcı ~0 ₺ hedefi — bütçe kısıtı değil, ulusal ölçekte maliyetin doğrusal patlamaması için **bilinçli tercih** (ücretsiz/düşük katman + edge cache; bkz. [[06-Bulut]], [[11-Olcekleme]]).
 - **Platform:** Android + iOS birincil, Web ikincil.
+- **Yayılım:** Sakarya'da pilot → Türkiye geneli. Coğrafi kapsam artışı POI taban katmanında (Türkiye geneli, canlı) çözülü; gönüllü tarafı şehir bazlı segmentasyon gerektirir (bkz. [[11-Olcekleme]]).
 
 ## MVP Kapsamı
 **VAR:** Yukarıdaki 7 fonksiyonel gereksinimin tamamı.

@@ -8,7 +8,7 @@ bağımlılıklar: [[02-API-Arka-Uc]], [[13-Recovery]], [[06-Bulut]], [[08-Guven
 # 12 · Loglama (Logging & Observability)
 
 ## Neden önemli
-Çağrı zinciri (Firestore → Function → FCM → CallKit → Agora) çok parçalı; bir çağrı düştüğünde log olmadan **nerede** düştüğünü bulmak imkânsız. Atlanırsa "gönüllü çağrıyı alamıyor" gibi hatalar tahminle aranır ve bitirme demosunda canlı patlar.
+Çağrı zinciri (Firestore → Function → FCM → CallKit → Agora) çok parçalı; bir çağrı düştüğünde log olmadan **nerede** düştüğünü bulmak imkânsız. Atlanırsa "gönüllü çağrıyı alamıyor" gibi hatalar tahminle aranır ve canlı production'da gerçek kullanıcının acil yardım çağrısında patlar.
 
 ## Karar (ne + NEDEN)
 **MVP için "ücretsiz + yüksek getirili" gözlemlenebilirlik:**
@@ -57,7 +57,7 @@ bağımlılıklar: [[02-API-Arka-Uc]], [[13-Recovery]], [[06-Bulut]], [[08-Guven
 ## Açık Sorular
 - ~~Çağrı düşme oranını ölçmeden "ürün çalışıyor" denebilir mi?~~ Artık ölçülebilir (funnel kuruldu); kalan: yeterli veri biriktikten sonra oranı yorumla.
 - **Crashlytics + Analytics KVKK açısından açık rıza gerektiriyor mu?** (kullanıcıya aydınlatma metninde bildirilmeli — bkz. [[08-Guvenlik]] KVKK TODO). Teknik tarafta veri anonim ve debug'da kapalı, ama **rıza/aydınlatma metni hâlâ açık.**
-- Cloud Functions log retention ne kadar; demo/jüri öncesi yeterli geçmiş tutuluyor mu?
+- Cloud Functions log retention ne kadar; canlı olay incelemesi (post-mortem) için yeterli geçmiş tutuluyor mu?
 - Çağrı tamamlanma event'i yalnızca arayan tarafta sayılıyor (çift sayım önlemek için); ağ kesintisinde event kaybı olursa funnel az sayar — kabul edilebilir mi?
 
 ## TODO
@@ -65,6 +65,7 @@ bağımlılıklar: [[02-API-Arka-Uc]], [[13-Recovery]], [[06-Bulut]], [[08-Guven
 - [x] Analytics ile çağrı funnel'ı kur → [[PRD]] metriklerine bağla — *2026-06-28*
 - [x] Çağrı durum geçişlerine yapılandırılmış (anonim) event ekle (düşme analizi) — *2026-06-28*
 - [x] Log'lara konum/kişisel veri sızmadığını denetle (event'ler parametresiz, `setUserIdentifier` yok, debug'da kapalı) → [[08-Guvenlik]] — *2026-06-28*
+  - **Ek denetim (*2026-06-29*, O1):** `database_service.dart:40` `debugPrint` ile **e-posta** logluyordu (KVKK + CLAUDE.md "Asla Yapma #6" ihlali; `debugPrint` release'de de logcat'e basar) → PII'siz mesaja indirildi. İlk denetim yalnızca `AnalyticsService` event'lerini kapsadığından gözden kaçmıştı. Kalan tarama: diğer servislerde `debugPrint`'lerin `$e`/değişken interpolasyonunda PII taşımadığı periyodik gözden geçirilmeli → [[08-Guvenlik]]
 - [ ] KVKK aydınlatma/rıza metnine Crashlytics + Analytics kullanımını ekle → [[08-Guvenlik]]
 - [ ] Release pipeline'da `--obfuscate` sembol klasörünü arşivle (deobfuscation için) → [[07-CI-CD]]
 - [ ] Birkaç gün veri sonrası `tamamlanan çağrı oranı`nı [[PRD]] hedefiyle karşılaştır

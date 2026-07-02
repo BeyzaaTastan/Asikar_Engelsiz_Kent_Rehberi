@@ -66,6 +66,11 @@ class SettingsService {
     await _prefs.setStringList('recent_map_searches', trimmed);
   }
 
+  /// Tüm son harita aramalarını siler (kullanıcı "Temizle"ye basınca).
+  Future<void> clearRecentMapSearches() async {
+    await _prefs.remove('recent_map_searches');
+  }
+
   // Yardımcı metodlar
   String _encodeJson(Map<String, dynamic> m) {
     return m.entries.map((e) => '${e.key}=${e.value}').join('||');

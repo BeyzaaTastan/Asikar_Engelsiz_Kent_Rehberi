@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -7,6 +10,15 @@ plugins {
     id("kotlin-android")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Release imzalama: key.properties varsa oradan oku (repoda DEĞİL, .gitignore'da).
+// Yoksa debug imzaya düşer → geliştirme ve `flutter run --release` çalışmaya devam eder.
+// (bkz. android/key.properties.example, vault/13-Recovery.md, vault/05-Barindirma.md)
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -35,11 +47,28 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = (keystoreProperties["storeFile"] as String?)?.let { file(it) }
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            // key.properties sağlanmışsa GERÇEK release anahtarı; yoksa debug anahtarına
+            // düşer. Play Store yayını için key.properties + keystore ZORUNLU
+            // (bkz. android/key.properties.example). Ayrıca placeholder applicationId
+            // (com.example.*) gerçek paket adına çevrilmeli + Firebase Console'da yeniden
+            // kaydedilmeli (google-services.json eşleşmesi) — koordineli ops adımı.
+            signingConfig = if (keystorePropertiesFile.exists())
+                signingConfigs.getByName("release")
+            else
+                signingConfigs.getByName("debug")
         }
     }
 }

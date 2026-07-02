@@ -8,7 +8,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../main.dart';
 import '../screens/call_screen.dart';
+import '../utils/channel_validator.dart';
 import 'analytics_service.dart';
+import 'city_lookup_service.dart';
 
 // 🛑 ÇOK ÖNEMLİ: Bu fonksiyon sınıfın DIŞINDA olmak zorunda.
 // Çünkü uygulama kapalıyken bile çalışıp mesajları yakalaması gerekiyor.
@@ -22,24 +24,10 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
-/// CallKit `extra` / FCM payload'ından GEÇERLİ bir Agora kanal adını
-/// (= çağrı Firestore belge ID'si) çıkarır. Geçersizse (null/boş) `null` döner.
-///
-/// **Neden:** Eski kodda kanal yoksa `'aktif_cagri'` / `'yardim_kanali'` gibi
-/// paylaşılan sabitlere düşülüyordu. Eşzamanlı çağrılarda bu, iki ayrı çağrının
-/// aynı kanala bağlanmasına (yanlış görüşme) veya var olmayan bir belgeye yazılmaya
-/// yol açıyordu. Artık kanal yoksa çağrı kurulmaz/kabul edilmez — sessizce reddedilir.
-String? _validChannelName(Object? raw) {
-  if (raw is String) {
-    final trimmed = raw.trim();
-    if (trimmed.isNotEmpty) return trimmed;
-  }
-  return null;
-}
-
 void _showCallkitIncoming(String? callerName, String? channelName) async {
   // Geçerli bir kanal yoksa çağrıyı hiç gösterme (bağlanılacak görüşme yok).
-  final channel = _validChannelName(channelName);
+  // Kanal doğrulama mantığı saf/test edilebilir: lib/utils/channel_validator.dart
+  final channel = validChannelName(channelName);
   if (channel == null) {
     debugPrint("⛔ Geçersiz çağrı sinyali: channel_name yok/boş, CallKit gösterilmiyor.");
     return;
@@ -187,22 +175,63 @@ class NotificationService {
     }
   }
 
+  // Gönüllünün abone olduğu şehir bazlı topic ('volunteers_<sehir>'); çıkışta
+  // aynı topic'ten çıkabilmek için tutulur. Şehir çözümü oturumda bir kez denenir.
+  static String? _subscribedCityTopic;
+  static bool _cityTopicAttempted = false;
+
+  /// Gönüllüyü çağrı kanallarına abone eder.
+  ///
+  /// İKİ topic'e abone olunur:
+  /// - Global `volunteers` → **uzaktan (görüntülü)** çağrılar (konumdan bağımsız).
+  /// - `volunteers_<sehir>` → **fiziksel** çağrılar (yalnızca gönüllünün bulunduğu şehir).
+  ///
+  /// Şehir, gönüllünün ANLIK GPS konumundan çözülür (bkz. [CityLookupService]).
+  /// Konum yoksa yalnızca global aboneliğe düşülür (gönüllü fiziksel çağrı almaz).
+  /// `main_wrapper` bu metodu her build'de çağırabildiği için şehir çözümü
+  /// oturumda yalnızca bir kez denenir (`_cityTopicAttempted`).
   static Future<void> subscribeToVolunteers() async {
     try {
       await _messaging.subscribeToTopic('volunteers');
-      debugPrint("Gönüllüler kanalına abone olundu.");
+      debugPrint("Global gönüllü kanalına abone olundu.");
     } catch (e) {
-      debugPrint("Kanal aboneliği başarısız: $e");
+      debugPrint("Global kanal aboneliği başarısız: $e");
+    }
+
+    if (_cityTopicAttempted) return;
+    _cityTopicAttempted = true;
+    try {
+      final slug = await CityLookupService.currentCitySlug();
+      if (slug != null) {
+        final topic = 'volunteers_$slug';
+        await _messaging.subscribeToTopic(topic);
+        _subscribedCityTopic = topic;
+        debugPrint("Şehir gönüllü kanalına abone olundu: $topic");
+      } else {
+        debugPrint("Şehir çözülemedi; yalnızca global gönüllü kanalı aktif.");
+      }
+    } catch (e) {
+      debugPrint("Şehir kanal aboneliği başarısız: $e");
     }
   }
 
   static Future<void> unsubscribeFromVolunteers() async {
     try {
       await _messaging.unsubscribeFromTopic('volunteers');
-      debugPrint("Gönüllüler kanalından çıkıldı.");
+      debugPrint("Global gönüllü kanalından çıkıldı.");
     } catch (e) {
-      debugPrint("Kanal aboneliğinden çıkış başarısız: $e");
+      debugPrint("Global kanal aboneliğinden çıkış başarısız: $e");
     }
+    if (_subscribedCityTopic != null) {
+      try {
+        await _messaging.unsubscribeFromTopic(_subscribedCityTopic!);
+        debugPrint("Şehir gönüllü kanalından çıkıldı: $_subscribedCityTopic");
+      } catch (e) {
+        debugPrint("Şehir kanal aboneliğinden çıkış başarısız: $e");
+      }
+      _subscribedCityTopic = null;
+    }
+    _cityTopicAttempted = false;
   }
 
   /// FCM token'ı Firestore'daki kullanıcı belgesine kaydeder.
@@ -304,7 +333,7 @@ class NotificationService {
         final status = activeCall?['callStatus'];
         // Eğer çağrı "accepted" durumundaysa (kullanıcı dışarıdan cevapladı)
         if (status == 'accepted' || status == 'ACCEPTED') {
-          final channelName = _validChannelName(activeCall?['extra']?['channel_name']);
+          final channelName = validChannelName(activeCall?['extra']?['channel_name']);
           if (channelName == null) {
             debugPrint("⚠️ Aktif çağrıda geçerli channel_name yok; yönlendirme atlanıyor.");
           } else {
@@ -329,7 +358,7 @@ class NotificationService {
 
             // Kanal adı yalnızca event'ten okunur; paylaşılan sabite fallback YOK.
             // Geçersizse bağlanma — aksi halde yanlış görüşmeye düşme riski olur.
-            final channelName = _validChannelName(event.body?['extra']?['channel_name']);
+            final channelName = validChannelName(event.body?['extra']?['channel_name']);
             if (channelName == null) {
               debugPrint("⛔ Kabul edilen çağrıda geçerli channel_name yok; bağlanılmıyor.");
               FlutterCallkitIncoming.endAllCalls();

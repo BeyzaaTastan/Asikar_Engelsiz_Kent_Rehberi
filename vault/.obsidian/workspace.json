@@ -74,7 +74,8 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 300,
+    "collapsed": true
   },
   "right": {
     "id": "7ff3018b8b8292bd",
@@ -162,7 +163,8 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300
+    "width": 300,
+    "collapsed": true
   },
   "left-ribbon": {
     "hiddenItems": {
@@ -177,23 +179,24 @@
   },
   "active": "7381710338e7c71b",
   "lastOpenFiles": [
-    "06-Security/09-Rate-Limiting.md.tmp.27168.acec915f3176",
-    "06-Security/09-Rate-Limiting.md.tmp.27168.f8baac948e6b",
-    "06-Security/08-Guvenlik.md.tmp.27168.2f6b76228007",
-    "06-Security/08-Guvenlik.md.tmp.27168.18899fff1650",
-    "06-Security/08-Guvenlik.md.tmp.27168.2a5abd07b837",
-    "06-Security/08-Guvenlik.md.tmp.27168.5f045c1c2554",
-    "05-Infrastructure/06-Bulut.md",
-    "01-Frontend/01-On-Yuz.md.tmp.35084.3ffddd8a5451",
-    "01-Frontend/01-On-Yuz.md.tmp.35084.7ceced92b213",
-    "06-Security/09-Rate-Limiting.md.tmp.35084.0541de5cccbc",
-    "06-Security/09-Rate-Limiting.md.tmp.35084.ecb6af2eeb47",
-    "06-Security/09-Rate-Limiting.md.tmp.35084.d6286453379b",
+    "05-Infrastructure/07-CI-CD.md.tmp.8236.3f07509cb9df",
+    "05-Infrastructure/07-CI-CD.md.tmp.8236.1fff4062c63c",
+    "01-Frontend/01-On-Yuz.md.tmp.8236.9cc4f52f1d6c",
+    "01-Frontend/01-On-Yuz.md.tmp.8236.f36050a402d4",
+    "01-Frontend/01-On-Yuz.md.tmp.8236.8a79bfa73d3e",
+    "01-Frontend/01-On-Yuz.md.tmp.24088.1a5a877f350c",
+    "07-Performance/11-Olcekleme.md.tmp.24088.8f411f71d784",
+    "07-Performance/10-Cache-CDN.md.tmp.24088.e655efaa931d",
+    "01-Frontend/01-On-Yuz.md.tmp.24088.d71d1089725d",
+    "01-Frontend/01-On-Yuz.md.tmp.24088.0d695cc74c1b",
+    "07-Performance/11-Olcekleme.md.tmp.24088.5875ee53bec8",
+    "00-Overview/Vision.md",
     "2026-06-27.md",
+    "00-Overview/PRD.md",
+    "05-Infrastructure/06-Bulut.md",
     "07-Performance/10-Cache-CDN.md",
     "03-Data/03-Veritabani.md",
     "08-Reliability/12-Loglama.md",
-    "00-Overview/PRD.md",
     "00-Overview/Architecture-Overview.md"
   ]
 }

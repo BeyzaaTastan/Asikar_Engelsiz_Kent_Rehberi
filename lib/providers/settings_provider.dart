@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/settings_service.dart';
+import '../constants/app_colors.dart';
 
 // SettingsService'i async olarak başlatan provider.
 // main.dart'ta override edilir: ProviderScope(overrides: [...])
@@ -120,14 +121,14 @@ String fontScaleLabel(double scale) {
 ColorScheme highContrastColorScheme(Brightness brightness) {
   if (brightness == Brightness.dark) {
     return const ColorScheme.dark(
-      primary: Color(0xFFFFFF00),       // Parlak sarı
+      primary: AppColors.hcYellow,      // Parlak sarı
       onPrimary: Colors.black,
       surface: Colors.black,
-      onSurface: Color(0xFFFFFFFF),
+      onSurface: Colors.white,
     );
   }
   return const ColorScheme.light(
-    primary: Color(0xFF000080),          // Koyu lacivert
+    primary: AppColors.hcNavy,           // Koyu lacivert
     onPrimary: Colors.white,
     surface: Colors.white,
     onSurface: Colors.black,

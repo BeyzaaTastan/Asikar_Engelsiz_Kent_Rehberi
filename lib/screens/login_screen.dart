@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
-import '../main_wrapper.dart';
-import 'register_screen.dart';
+import '../router/app_router.dart';
 import '../constants/app_colors.dart';
 
 /// Kullanıcının email ve password girerek sisteme giriş yaptığı ekran.
@@ -51,9 +50,9 @@ class _LoginScreenState extends State<LoginScreen> {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Giriş Başarılı! Hoş geldiniz.')),
           );
-          Navigator.pushAndRemoveUntil(
+          Navigator.pushNamedAndRemoveUntil(
             context,
-            MaterialPageRoute(builder: (context) => const MainWrapper()),
+            AppRoutes.mainWrapper,
             (route) => false,
           );
         }
@@ -220,9 +219,9 @@ class _LoginScreenState extends State<LoginScreen> {
                                       ScaffoldMessenger.of(context).showSnackBar(
                                         const SnackBar(content: Text('Google ile Giriş Başarılı!')),
                                       );
-                                      Navigator.pushAndRemoveUntil(
+                                      Navigator.pushNamedAndRemoveUntil(
                                         context,
-                                        MaterialPageRoute(builder: (context) => const MainWrapper()),
+                                        AppRoutes.mainWrapper,
                                         (route) => false,
                                       );
                                     } else {
@@ -248,10 +247,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           children: [
                             GestureDetector(
                               onTap: () {
-                                Navigator.push(
-                                  context,
-                                  MaterialPageRoute(builder: (context) => const RegisterScreen()),
-                                );
+                                Navigator.pushNamed(context, AppRoutes.register);
                               },
                               child: Text.rich(
                                 TextSpan(

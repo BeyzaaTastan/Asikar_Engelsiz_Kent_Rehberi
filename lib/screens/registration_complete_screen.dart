@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../constants/app_colors.dart';
-import '../main_wrapper.dart'; // Ana sayfa yönlendirmesi için
+import '../router/app_router.dart'; // Ana sayfa yönlendirmesi için
 
 /// Kayıt işlemlerinin tamamlandığını belirten "Tebrikler" / "Başarılı" ekranı.
 class RegistrationCompleteScreen extends StatelessWidget {
@@ -15,7 +15,7 @@ class RegistrationCompleteScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Tasarıma uygun renk tanımlamaları
-    const Color checkBgColor = Color(0xFF1A4F00);
+    const Color checkBgColor = AppColors.successDark;
 
     // KULLANICI TİPİNE GÖRE DİNAMİK METİN BELİRLEME
     final String dynamicText = isVolunteer
@@ -44,9 +44,9 @@ class RegistrationCompleteScreen extends StatelessWidget {
             icon: Icon(Icons.close, color: AppColors.primary),
             onPressed: () {
               // Uygulamayı kapatma ya da ana sayfaya geçme işlemi
-              Navigator.pushAndRemoveUntil(
+              Navigator.pushNamedAndRemoveUntil(
                 context,
-                MaterialPageRoute(builder: (context) => const MainWrapper()),
+                AppRoutes.mainWrapper,
                 (route) => false,
               );            },
             tooltip: 'Kapat',
@@ -136,7 +136,7 @@ class RegistrationCompleteScreen extends StatelessWidget {
                                   ),
                                   child: const Icon(
                                     Icons.check_circle,
-                                    color: Color(0xFFADF688),
+                                    color: AppColors.successLight,
                                     size: 28,
                                   ),
                                 ),
@@ -217,11 +217,9 @@ class RegistrationCompleteScreen extends StatelessWidget {
                         debugPrint(
                           "Uygulama Başlıyor! Ana Sayfaya geçiliyor...",
                         );
-                        Navigator.pushAndRemoveUntil(
+                        Navigator.pushNamedAndRemoveUntil(
                           context,
-                          MaterialPageRoute(
-                            builder: (context) => const MainWrapper(),
-                          ),
+                          AppRoutes.mainWrapper,
                           (route) => false,
                         );
                       },

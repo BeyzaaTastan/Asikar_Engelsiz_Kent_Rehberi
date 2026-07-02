@@ -73,6 +73,8 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Görüntülü arama yapabilmek için kameranıza erişmemiz gerekiyor.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Görüntülü veya sesli aramada konuşabilmeniz için mikrofonunuza erişmemiz gerekiyor.</string>
+	<string>Görüntülü aramada konuşabilmeniz ve haritada sesli arama yapabilmeniz için mikrofonunuza erişmemiz gerekiyor.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Haritada sesle yer arayabilmeniz için konuşmanızı metne çevirmemiz gerekiyor.</string>
 </dict>
 </plist>

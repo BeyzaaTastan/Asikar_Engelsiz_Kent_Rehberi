@@ -94,6 +94,9 @@ class FoursquarePlacesService {
   }) async {
     if (_apiKey.isEmpty) {
       debugPrint('Foursquare API key bulunamadı (.env dosyasını kontrol edin)');
+      // Loading'i kapat — yoksa çağıran taraf (map_screen) göstergeyi sonsuz
+      // "yükleniyor" durumunda bırakır.
+      onLoadingChanged(false);
       return;
     }
 
