@@ -107,5 +107,73 @@ void main() {
 
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
     });
+
+    testWidgets('çok sonuçta liste tavana değip kaydırılabilir', (tester) async {
+      // 20 sonuç + dar availableHeight → tümü sığmaz; alttaki öğe başta görünmez
+      // ama listeye kaydırılınca erişilebilir (panel kendi içinde kayar).
+      final many = List.generate(
+        20,
+        (i) => {
+          'title': 'Sonuç $i',
+          'subtitle': 'Adres $i',
+          'type': 'place',
+          'lat': 40.0 + i,
+          'lon': 30.0 + i,
+        },
+      );
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SmartResultsOverlay(
+            isSearchFieldEmpty: false,
+            isLoading: false,
+            items: many,
+            onItemTap: (_) {},
+            availableHeight: 400,
+          ),
+        ),
+      ));
+
+      // İlk öğe görünür, son öğe başta görünmez (liste tavanda kesildi).
+      expect(find.text('Sonuç 0'), findsOneWidget);
+      expect(find.text('Sonuç 19'), findsNothing);
+
+      // Listeye kaydırınca son öğeye erişilir → kaydırılabilir.
+      await tester.dragUntilVisible(
+        find.text('Sonuç 19'),
+        find.byType(ListView),
+        const Offset(0, -200),
+      );
+      expect(find.text('Sonuç 19'), findsOneWidget);
+    });
+
+    testWidgets('klavye kapalıyken (büyük availableHeight) panel alanı doldurur',
+        (tester) async {
+      // Büyük availableHeight → 8 öğe (tavana değmeyecek kadar) tümü görünür.
+      final some = List.generate(
+        8,
+        (i) => {
+          'title': 'Yer $i',
+          'subtitle': 'Mah $i',
+          'type': 'place',
+          'lat': 40.0 + i,
+          'lon': 30.0 + i,
+        },
+      );
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SmartResultsOverlay(
+            isSearchFieldEmpty: false,
+            isLoading: false,
+            items: some,
+            onItemTap: (_) {},
+            availableHeight: 2000,
+          ),
+        ),
+      ));
+
+      // Alan geniş → hepsi (ilk ve son dahil) tek seferde görünür.
+      expect(find.text('Yer 0'), findsOneWidget);
+      expect(find.text('Yer 7'), findsOneWidget);
+    });
   });
 }

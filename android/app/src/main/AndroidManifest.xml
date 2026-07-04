@@ -59,6 +59,11 @@
         <intent>
             <action android:name="android.speech.RecognitionService"/>
         </intent>
+        <!-- flutter_tts: Android 11+ metin-okuma (TTS) motorunu bulabilmek için
+             görünürlük sorgusu. Yoksa sesli yönerge okunmaz. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE"/>
+        </intent>
         <!-- url_launcher: http/https linklerini açmak için -->
         <intent>
             <action android:name="android.intent.action.VIEW"/>

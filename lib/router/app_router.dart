@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:latlong2/latlong.dart';
 import '../screens/splash_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/register_screen.dart';
@@ -10,6 +11,7 @@ import '../screens/volunteer_status_screen.dart';
 import '../screens/volunteer_skills_screen.dart';
 import '../screens/registration_complete_screen.dart';
 import '../screens/route_screen.dart';
+import '../screens/directions_search_screen.dart';
 import '../screens/venue/add_venue_screen.dart';
 import '../screens/venue/venue_detail_screen.dart';
 import '../main_wrapper.dart';
@@ -30,6 +32,7 @@ class AppRoutes {
   static const String volunteerSkills = '/volunteer-skills';
   static const String registrationComplete = '/registration-complete';
   static const String routeScreen = '/route';
+  static const String directions = '/directions';
   static const String addVenue = '/add-venue';
   static const String venueDetail = '/venue-detail';
 }
@@ -102,7 +105,23 @@ class AppRouter {
         return MaterialPageRoute(
           builder: (_) => RouteScreen(
             destinationName: args['destinationName'] as String,
-            destinationLocation: args['destinationLocation'] as dynamic,
+            destinationLocation: args['destinationLocation'] as LatLng?,
+            startName: args['startName'] as String?,
+            startLocation: args['startLocation'] as LatLng?,
+            initialModeIndex: args['initialModeIndex'] as int? ?? 0,
+          ),
+        );
+
+      case AppRoutes.directions:
+        final args = settings.arguments as Map<String, dynamic>?;
+        return MaterialPageRoute(
+          builder: (_) => DirectionsSearchScreen(
+            initialOriginName: args?['originName'] as String?,
+            initialOriginLocation: args?['originLocation'] as LatLng?,
+            initialDestName: args?['destName'] as String?,
+            initialDestLocation: args?['destLocation'] as LatLng?,
+            focusField: args?['focusField'] as String?,
+            initialModeIndex: args?['initialModeIndex'] as int? ?? 0,
           ),
         );
 

@@ -5,6 +5,8 @@ import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import '../constants/app_colors.dart';
+import '../router/app_router.dart';
+import '../widgets/route_endpoints_card.dart';
 
 // Ulaşım modu modeli
 class _TransportMode {
@@ -39,12 +41,27 @@ String _drivingSecondaryUrl(double sLon, double sLat, double eLon, double eLat) 
 
 class RouteScreen extends StatefulWidget {
   final String destinationName;
-  final LatLng destinationLocation;
+
+  /// Varış konumu. `null` → kullanıcının anlık konumu (GPS) kullanılır (swap
+  /// sonrası "Konumunuz" varış olabilir). Mevcut çağıranlar gerçek konum geçer.
+  final LatLng? destinationLocation;
+
+  /// Başlangıç adı/konumu. `startLocation` null ise başlangıç anlık konumdur
+  /// (varsayılan "Konumunuz"). Yön tarifi ekranı özel başlangıç seçilirse doldurur.
+  final String? startName;
+  final LatLng? startLocation;
+
+  /// Başlangıçta seçili ulaşım modu (0: Yürüyüş, 1: Tekerlekli Sandalye,
+  /// 2: Taşıt). Yön tarifi ekranından seçilen mod buraya taşınır.
+  final int initialModeIndex;
 
   const RouteScreen({
     super.key,
     this.destinationName = 'Hedef',
-    this.destinationLocation = const LatLng(40.7731, 29.9833),
+    this.destinationLocation,
+    this.startName,
+    this.startLocation,
+    this.initialModeIndex = 0,
   });
 
   @override
@@ -82,14 +99,38 @@ class _RouteScreenState extends State<RouteScreen>
     ),
   ];
 
-  int _selectedModeIndex = 0;
+  late int _selectedModeIndex = widget.initialModeIndex.clamp(0, _modes.length - 1);
 
-  // Konum ve rota durumu
-  LatLng? _userLocation;
+  // Başlangıç/varış durumu — konum null ise anlık konum (GPS) kullanılır.
+  // Böylece swap (ters çevir) her iki uç için de "Konumunuz"u destekler.
+  late String _startName = widget.startName ?? 'Konumunuz';
+  late LatLng? _startLoc = widget.startLocation;
+  late String _endName = widget.destinationName;
+  late LatLng? _endLoc = widget.destinationLocation;
+
+  // Anlık konum (GPS) — hangi uç null ise onun yerine kullanılır.
+  LatLng? _gps;
   List<LatLng> _routePoints = [];
   bool _isLoadingLocation = true;
   bool _isLoadingRoute = false;
   String? _errorMsg;
+
+  // Etkin (çözülmüş) uç noktalar — null uç GPS'e düşer.
+  LatLng? get _effectiveStart => _startLoc ?? _gps;
+  LatLng? get _effectiveEnd => _endLoc ?? _gps;
+
+  /// Başlangıç ↔ varış yer değiştir + rotayı yeniden hesapla (gerçek swap).
+  void _swapEndpoints() {
+    setState(() {
+      final tmpName = _startName;
+      _startName = _endName;
+      _endName = tmpName;
+      final tmpLoc = _startLoc;
+      _startLoc = _endLoc;
+      _endLoc = tmpLoc;
+    });
+    _fetchRoute();
+  }
 
   // Rota bilgileri (OSRM'den)
   double _distanceKm = 0;
@@ -111,7 +152,7 @@ class _RouteScreenState extends State<RouteScreen>
       // Konum izni
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
-        _userLocation = const LatLng(40.7731, 29.9833);
+        _gps = const LatLng(40.7731, 29.9833);
       } else {
         LocationPermission perm = await Geolocator.checkPermission();
         if (perm == LocationPermission.denied) {
@@ -119,17 +160,17 @@ class _RouteScreenState extends State<RouteScreen>
         }
         if (perm == LocationPermission.denied ||
             perm == LocationPermission.deniedForever) {
-          _userLocation = const LatLng(40.7731, 29.9833);
+          _gps = const LatLng(40.7731, 29.9833);
         } else {
           final pos = await Geolocator.getCurrentPosition(
             locationSettings:
                 const LocationSettings(accuracy: LocationAccuracy.high),
           );
-          _userLocation = LatLng(pos.latitude, pos.longitude);
+          _gps = LatLng(pos.latitude, pos.longitude);
         }
       }
     } catch (e) {
-      _userLocation = const LatLng(40.7731, 29.9833);
+      _gps = const LatLng(40.7731, 29.9833);
     }
 
     setState(() => _isLoadingLocation = false);
@@ -137,7 +178,9 @@ class _RouteScreenState extends State<RouteScreen>
   }
 
   Future<void> _fetchRoute() async {
-    if (_userLocation == null) return;
+    final start = _effectiveStart;
+    final end = _effectiveEnd;
+    if (start == null || end == null) return;
 
     setState(() {
       _isLoadingRoute = true;
@@ -146,8 +189,6 @@ class _RouteScreenState extends State<RouteScreen>
     });
 
     final mode = _modes[_selectedModeIndex];
-    final start = _userLocation!;
-    final end = widget.destinationLocation;
 
     // Her mod için doğru OSRM sunucu URL'leri moda göre üretilir
     final primaryUrl   = Uri.parse(mode.primaryUrlBuilder(start.longitude, start.latitude, end.longitude, end.latitude));
@@ -275,7 +316,8 @@ class _RouteScreenState extends State<RouteScreen>
           FlutterMap(
             mapController: _mapController,
             options: MapOptions(
-              initialCenter: widget.destinationLocation,
+              initialCenter: widget.destinationLocation ??
+                  const LatLng(40.7731, 29.9833),
               initialZoom: 13.0,
             ),
             children: [
@@ -304,9 +346,9 @@ class _RouteScreenState extends State<RouteScreen>
 
               MarkerLayer(
                 markers: [
-                  if (_userLocation != null)
+                  if (_effectiveStart != null)
                     Marker(
-                      point: _userLocation!,
+                      point: _effectiveStart!,
                       width: 44,
                       height: 44,
                       child: Container(
@@ -328,8 +370,9 @@ class _RouteScreenState extends State<RouteScreen>
                         ),
                       ),
                     ),
-                  Marker(
-                    point: widget.destinationLocation,
+                  if (_effectiveEnd != null)
+                    Marker(
+                    point: _effectiveEnd!,
                     width: 44,
                     height: 56,
                     alignment: Alignment.topCenter,
@@ -369,110 +412,45 @@ class _RouteScreenState extends State<RouteScreen>
             ],
           ),
 
-          // ── KATMAN 2: Üst Yüzen Kart (Google Maps Tarzı) ─────────────────
+          // ── KATMAN 2: Üst Yüzen Kart — ortak RouteEndpointsCard ──────────
           Positioned(
             top: topPad + 8,
             left: 12,
             right: 12,
-            child: Container(
-              padding: const EdgeInsets.fromLTRB(4, 8, 4, 8),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.12),
-                    blurRadius: 20,
-                    offset: const Offset(0, 4),
-                  ),
-                ],
+            child: RouteEndpointsCard(
+              onBack: () => Navigator.pop(context),
+              onSwap: _swapEndpoints,
+              onOriginTap: () => _editEndpoint('origin'),
+              onDestTap: () => _editEndpoint('destination'),
+              originContent: _endpointText(
+                (_startLoc == null && _isLoadingLocation)
+                    ? 'Konum alınıyor...'
+                    : _startName,
+                // Başlangıç anlık konumsa turkuaz vurgula (giriş ekranıyla tutarlı).
+                highlight: _startLoc == null,
               ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Geri butonu
-                  IconButton(
-                    icon: const Icon(Icons.arrow_back, color: AppColors.primary, size: 24),
-                    onPressed: () => Navigator.pop(context),
-                  ),
-                  // Konum satırları
-                  Expanded(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Başlangıç konumu
-                        _buildLocationBox(
-                          _isLoadingLocation ? 'Konum alınıyor...' : 'Mevcut Konumunuz',
-                          Icons.radio_button_checked,
-                          _modeColor,
-                        ),
-                        // Noktalı ayraç
-                        Padding(
-                          padding: const EdgeInsets.only(left: 14),
-                          child: Row(
-                            children: List.generate(
-                              4,
-                              (i) => Container(
-                                margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 1),
-                                width: 3,
-                                height: 3,
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade300,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                        // Bitiş konumu
-                        _buildLocationBox(
-                          widget.destinationName,
-                          Icons.location_on,
-                          AppColors.danger,
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Sağ aksiyon sütunu
-                  Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      // ⋮ Seçenekler menüsü
-                      PopupMenuButton<String>(
-                        icon: const Icon(Icons.more_vert, color: AppColors.primary, size: 22),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        onSelected: (value) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(value)),
-                          );
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'Rota Seçenekleri', child: Text('Rota Seçenekleri')),
-                          PopupMenuItem(value: 'Ara Nokta Ekle', child: Text('Ara Nokta Ekle')),
-                          PopupMenuItem(value: 'Rotayı Paylaş', child: Text('Rotayı Paylaş')),
-                        ],
-                      ),
-                      const SizedBox(height: 4),
-                      // ↑↓ Başlangıç-bitiş yer değiştirme butonu
-                      InkWell(
-                        borderRadius: BorderRadius.circular(20),
-                        onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Rota ters çevrildi.')),
-                          );
-                        },
-                        child: Container(
-                          padding: const EdgeInsets.all(6),
-                          decoration: BoxDecoration(
-                            border: Border.all(color: Colors.grey.shade300),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: const Icon(Icons.swap_vert, color: AppColors.primary, size: 20),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(width: 4),
+              destContent: _endpointText(
+                (_endLoc == null && _isLoadingLocation)
+                    ? 'Konum alınıyor...'
+                    : _endName,
+              ),
+              trailingMenu: PopupMenuButton<String>(
+                icon: const Icon(Icons.more_vert,
+                    color: AppColors.primary, size: 22),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(14)),
+                onSelected: (value) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text(value)),
+                  );
+                },
+                itemBuilder: (_) => const [
+                  PopupMenuItem(
+                      value: 'Rota Seçenekleri', child: Text('Rota Seçenekleri')),
+                  PopupMenuItem(
+                      value: 'Ara Nokta Ekle', child: Text('Ara Nokta Ekle')),
+                  PopupMenuItem(
+                      value: 'Rotayı Paylaş', child: Text('Rotayı Paylaş')),
                 ],
               ),
             ),
@@ -538,27 +516,35 @@ class _RouteScreenState extends State<RouteScreen>
     );
   }
 
-  Widget _buildLocationBox(String text, IconData icon, Color color) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Icon(icon, color: color, size: 18),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textDark,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-        ],
+  /// RouteEndpointsCard içindeki uç metni (dokununca düzenleme ekranına gider).
+  Widget _endpointText(String text, {bool highlight = false}) {
+    return Text(
+      text,
+      style: TextStyle(
+        fontSize: 16,
+        fontWeight: FontWeight.w600,
+        color: highlight ? AppColors.secondary : AppColors.textDark,
       ),
+      maxLines: 1,
+      overflow: TextOverflow.ellipsis,
+    );
+  }
+
+  /// Uç satırına dokununca: mevcut başlangıç/varışı taşıyarak yön tarifi
+  /// (düzenleme) ekranını aç, dokunulan alanı odakla. pushReplacement →
+  /// route↔directions döngüsü düz kalır.
+  void _editEndpoint(String focusField) {
+    Navigator.pushReplacementNamed(
+      context,
+      AppRoutes.directions,
+      arguments: {
+        'originName': _startName,
+        'originLocation': _startLoc,
+        'destName': _endName,
+        'destLocation': _endLoc,
+        'focusField': focusField,
+        'initialModeIndex': _selectedModeIndex,
+      },
     );
   }
 

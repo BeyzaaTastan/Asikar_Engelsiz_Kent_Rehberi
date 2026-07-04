@@ -33,6 +33,7 @@ bağımlılıklar: [[08-Guvenlik]], [[02-API-Arka-Uc]], [[10-Cache-CDN]], [[06-B
 - **App Check ENFORCE AKTİF + DOĞRULANDI** (istemci + token fonksiyonu zorlaması + Firestore Console Enforce + debug token kayıtlı; debug çağrı testi `app:VALID`) — *2026-06-28*
 - **Foursquare atıf/lisans uyumu:** "Powered by Foursquare" görünür atıf eklendi (Places API lisans şartı: veri göründüğü her ekranda markalı atıf) — *2026-07-02* → [[10-Cache-CDN]], [[08-Guvenlik]]
 - **Sesli arama = cihaz OS tanıyıcısı** (`speech_to_text` → `VoiceSearchService`): API anahtarı/kota yok, **$0** — ücretsiz kota ilkesine uygun (bkz. [[01-On-Yuz]] · "Sesli arama") — *2026-07-02*
+- **Sesli yönerge = cihaz OS TTS'i** (`flutter_tts` → `TtsService`): panel açılınca "Aramak istediğiniz yeri söyleyin" seslendirmesi; API anahtarı/kota yok, **$0** — aynı ücretsiz ilke (bkz. [[01-On-Yuz]] · "Sesli arama paneli") — *2026-07-03*
 
 **YOK:**
 - Cloud Functions per-user rate limit (token sayacı)

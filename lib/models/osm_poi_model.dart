@@ -147,7 +147,10 @@ class OsmPoi {
       'dentist': 'Diş Hekimi',
       'doctors': 'Doktor',
       'veterinary': 'Veteriner',
+      'toilets': 'Tuvalet',
+      'kindergarten': 'Kreş',
       // shop
+      'shop_mall': 'AVM',
       'shop_convenience': 'Bakkal',
       'shop_bakery': 'Fırın',
       'shop_butcher': 'Kasap',

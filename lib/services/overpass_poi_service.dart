@@ -5,7 +5,31 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import '../models/osm_poi_model.dart';
 
+/// Tek kaynak — bir POI kategorisi: OSM (key/value) + Türkçe etiket + Türkçe
+/// arama eşanlamlıları + haritada gösterilsin mi.
+///
+/// Hem harita POI katmanı ([OverpassPoiService.categoryFilters]) hem birleşik
+/// aramanın kategori eşleştirmesi ([OverpassPoiService.categoriesForQuery])
+/// BURADAN türetilir → OSM tag tanımı TEK yerde yaşar (ör. market
+/// `shop=supermarket` bir kez; iki tabloda drift olmaz — "Market" hatası bu
+/// yüzden iki yerdeydi). rawType→Türkçe etiket ters eşlemesi modeldedir
+/// ([OsmPoi.categoryToTurkish]) ve bu listedeki tüm token'ları kapsar (isimsiz
+/// POI'lere arama listesinde başlık vermek için).
+class PoiCategory {
+  final String key; // 'amenity' | 'shop' | 'tourism' | 'leisure'
+  final String value; // 'cafe', 'supermarket', ...
+  final String label; // Harita çipi/katman adı (Türkçe)
+  final List<String> synonyms; // Türkçe arama terimleri (küçük harf)
+  final bool onMap; // harita POI katman setinde yer alır mı
+  const PoiCategory(this.key, this.value, this.label, this.synonyms,
+      {this.onMap = true});
 
+  /// `map_visuals` / `OsmPoi.amenityType` ile aynı token biçimi.
+  String get token => key == 'amenity' ? value : '${key}_$value';
+
+  /// Overpass seçici (bbox/around eki çağıran tarafından eklenir).
+  String get selector => 'nwr["$key"="$value"]';
+}
 
 /// Overpass API üzerinden haritanın görünür alanındaki POI'leri çeken servis.
 ///
@@ -27,33 +51,73 @@ class OverpassPoiService {
     _debounce?.cancel();
   }
 
-  // ── Türkçe kategori → OSM tag eşleştirmesi ────────────────────────────────
-  /// Haritada gösterilebilecek tüm POI türleri.
-  /// Key: Türkçe kategori adı, Value: Overpass sorgu parçası
-  static const Map<String, String> categoryFilters = {
-    'Kafe':       'nwr["amenity"="cafe"]',
-    'Restoran':   'nwr["amenity"="restaurant"]',
-    'Fast Food':  'nwr["amenity"="fast_food"]',
-    'Eczane':     'nwr["amenity"="pharmacy"]',
-    'Market':     'nwr["amenity"="supermarket"]',
-    'Hastane':    'nwr["amenity"="hospital"]',
-    'Banka':      'nwr["amenity"="bank"]',
-    'Okul':       'nwr["amenity"="school"]',
-    'Kütüphane':  'nwr["amenity"="library"]',
-    'Akaryakıt':  'nwr["amenity"="fuel"]',
-    'Otopark':    'nwr["amenity"="parking"]',
-    'Cami':       'nwr["amenity"="place_of_worship"]',
-    'Polis':      'nwr["amenity"="police"]',
-    'Postane':    'nwr["amenity"="post_office"]',
-    'Müze':       'nwr["tourism"="museum"]',
-    'Fırın':      'nwr["shop"="bakery"]',
-    'Kasap':      'nwr["shop"="butcher"]',
-    'Manav':      'nwr["shop"="greengrocer"]',
-    'Bakkal':     'nwr["shop"="convenience"]',
-    'Kuaför':     'nwr["shop"="hairdresser"]',
-    'Otel':       'nwr["tourism"="hotel"]',
-    'Park':       'nwr["leisure"="park"]',
+  // ── Tek kaynak: Türkçe kategori ↔ OSM tag ↔ arama eşanlamlıları ────────────
+  /// Tüm POI kategorileri (bkz. [PoiCategory]). `onMap=true` olanlar harita
+  /// katmanında; TÜMÜ aramada kullanılır. Yeni kategori/eşanlamlı eklemek TEK
+  /// satır — hem harita hem arama otomatik alır.
+  static const List<PoiCategory> poiCategories = [
+    // ── amenity ──
+    PoiCategory('amenity', 'cafe', 'Kafe', ['kafe', 'kahve']),
+    PoiCategory('amenity', 'restaurant', 'Restoran', ['restoran', 'lokanta', 'yemek']),
+    PoiCategory('amenity', 'fast_food', 'Fast Food', ['fast food', 'fastfood', 'yemek']),
+    PoiCategory('amenity', 'pharmacy', 'Eczane', ['eczane', 'ilaç', 'nöbetçi']),
+    PoiCategory('amenity', 'hospital', 'Hastane', ['hastane', 'sağlık']),
+    PoiCategory('amenity', 'clinic', 'Klinik', ['klinik', 'sağlık'], onMap: false),
+    PoiCategory('amenity', 'doctors', 'Doktor', ['doktor'], onMap: false),
+    PoiCategory('amenity', 'dentist', 'Diş Hekimi', ['dişçi', 'diş hekimi'], onMap: false),
+    PoiCategory('amenity', 'veterinary', 'Veteriner', ['veteriner'], onMap: false),
+    PoiCategory('amenity', 'bank', 'Banka', ['banka']),
+    PoiCategory('amenity', 'atm', 'ATM', ['atm', 'bankamatik'], onMap: false),
+    PoiCategory('amenity', 'school', 'Okul', ['okul']),
+    PoiCategory('amenity', 'university', 'Üniversite', ['üniversite', 'fakülte'], onMap: false),
+    PoiCategory('amenity', 'library', 'Kütüphane', ['kütüphane']),
+    PoiCategory('amenity', 'fuel', 'Akaryakıt', ['benzin', 'akaryakıt', 'benzinlik', 'petrol']),
+    PoiCategory('amenity', 'parking', 'Otopark', ['otopark']),
+    PoiCategory('amenity', 'place_of_worship', 'Cami', ['cami', 'camii', 'ibadet', 'mescit', 'kilise']),
+    PoiCategory('amenity', 'police', 'Polis', ['polis', 'karakol']),
+    PoiCategory('amenity', 'post_office', 'Postane', ['postane', 'ptt']),
+    PoiCategory('amenity', 'cinema', 'Sinema', ['sinema'], onMap: false),
+    PoiCategory('amenity', 'theatre', 'Tiyatro', ['tiyatro'], onMap: false),
+    PoiCategory('amenity', 'toilets', 'Tuvalet', ['tuvalet', 'lavabo', 'umumi'], onMap: false),
+    PoiCategory('amenity', 'kindergarten', 'Kreş', ['kreş', 'anaokulu'], onMap: false),
+    // ── shop ──
+    PoiCategory('shop', 'supermarket', 'Market', ['market', 'süpermarket']),
+    PoiCategory('shop', 'convenience', 'Bakkal', ['bakkal', 'market']),
+    PoiCategory('shop', 'bakery', 'Fırın', ['fırın', 'ekmek', 'pastane']),
+    PoiCategory('shop', 'butcher', 'Kasap', ['kasap']),
+    PoiCategory('shop', 'greengrocer', 'Manav', ['manav']),
+    PoiCategory('shop', 'hairdresser', 'Kuaför', ['kuaför', 'berber']),
+    PoiCategory('shop', 'mall', 'AVM', ['avm', 'alışveriş merkezi', 'alışveriş'], onMap: false),
+    // ── tourism ──
+    PoiCategory('tourism', 'hotel', 'Otel', ['otel', 'konaklama']),
+    PoiCategory('tourism', 'motel', 'Motel', ['motel', 'konaklama'], onMap: false),
+    PoiCategory('tourism', 'guest_house', 'Pansiyon', ['pansiyon', 'konaklama'], onMap: false),
+    PoiCategory('tourism', 'museum', 'Müze', ['müze']),
+    // ── leisure ──
+    PoiCategory('leisure', 'park', 'Park', ['park']),
+    PoiCategory('leisure', 'playground', 'Çocuk Parkı', ['çocuk parkı', 'oyun alanı'], onMap: false),
+    PoiCategory('leisure', 'sports_centre', 'Spor Merkezi', ['spor merkezi'], onMap: false),
+    PoiCategory('leisure', 'fitness_centre', 'Spor Salonu', ['spor salonu', 'fitness', 'gym'], onMap: false),
+  ];
+
+  /// Haritada gösterilecek kategoriler (Türkçe etiket → Overpass seçici).
+  /// [poiCategories] içinden `onMap=true` olanlardan türetilir → tag TEK yerde.
+  static final Map<String, String> categoryFilters = {
+    for (final c in poiCategories)
+      if (c.onMap) c.label: c.selector,
   };
+
+  /// Türkçe arama sorgusuna uyan kategoriler ([poiCategories] eşanlamlıları ile).
+  /// Overpass kategori araması bunların [PoiCategory.selector]'larını kullanır.
+  /// Eşleşme substring bazlı (Türkçe ekleri yakalar: "marketler", "parklar").
+  static List<PoiCategory> categoriesForQuery(String query) {
+    final q = query.toLowerCase().trim();
+    if (q.length < 2) return const [];
+    return [
+      for (final c in poiCategories)
+        if (c.synonyms.any((s) => q.contains(s))) c,
+    ];
+  }
 
   /// Sık kullanılan hızlı filtre chip'leri için alt küme.
   static const List<String> quickFilterCategories = [
@@ -157,21 +221,13 @@ class OverpassPoiService {
     required double centerLon,
     int radiusMeters = 3000,
   }) async {
-    // Türkçe sorguyu OSM amenity türüne çevir
-    final osmTypes = _turkishQueryToOsmTypes(categoryQuery);
-    if (osmTypes.isEmpty) return [];
+    // Türkçe sorguyu kategori(ler)e çevir (tek kaynak: poiCategories).
+    final matched = categoriesForQuery(categoryQuery);
+    if (matched.isEmpty) return [];
 
-    final typeFilter = osmTypes.map((t) {
-      if (t.startsWith('shop_')) {
-        return 'nwr["shop"="${t.substring(5)}"](around:$radiusMeters,$centerLat,$centerLon);';
-      } else if (t.startsWith('tourism_')) {
-        return 'nwr["tourism"="${t.substring(8)}"](around:$radiusMeters,$centerLat,$centerLon);';
-      } else if (t.startsWith('leisure_')) {
-        return 'nwr["leisure"="${t.substring(8)}"](around:$radiusMeters,$centerLat,$centerLon);';
-      } else {
-        return 'nwr["amenity"="$t"](around:$radiusMeters,$centerLat,$centerLon);';
-      }
-    }).join('\n');
+    final typeFilter = matched
+        .map((c) => '${c.selector}(around:$radiusMeters,$centerLat,$centerLon);')
+        .join('\n');
 
     final query = '''
 [out:json][timeout:20];
@@ -194,7 +250,11 @@ out body center;
         final elements = data['elements'] as List<dynamic>? ?? [];
         return elements
             .map((e) => OsmPoi.fromOverpassElement(e as Map<String, dynamic>))
-            .where((p) => p.name.isNotEmpty && p.latitude != 0)
+            // İsim filtresi YOK (harita katmanından farklı): kategori aramasında
+            // isimsiz POI'ler de döner (park/otopark/tuvalet sıklıkla isimsiz);
+            // başlık map_search_service'te poi.category ile doldurulur. Yalnız
+            // geçersiz koordinat elenir.
+            .where((p) => p.latitude != 0)
             .toList();
       }
     } catch (e) {
@@ -242,59 +302,6 @@ out body center;
     final n = bounds.northEast.latitude.toStringAsFixed(3);
     final e = bounds.northEast.longitude.toStringAsFixed(3);
     return '$s,$w,$n,$e';
-  }
-
-  /// Türkçe arama sorgusunu OSM amenity türlerine eşleştirir.
-  List<String> _turkishQueryToOsmTypes(String query) {
-    final q = query.toLowerCase().trim();
-    const mapping = {
-      'kafe': ['cafe'],
-      'kahve': ['cafe'],
-      'restoran': ['restaurant'],
-      'yemek': ['restaurant', 'fast_food'],
-      'lokanta': ['restaurant'],
-      'fast food': ['fast_food'],
-      'eczane': ['pharmacy'],
-      'ilaç': ['pharmacy'],
-      'market': ['supermarket'],
-      'süpermarket': ['supermarket'],
-      'bakkal': ['shop_convenience'],
-      'hastane': ['hospital'],
-      'sağlık': ['hospital', 'clinic'],
-      'klinik': ['clinic'],
-      'doktor': ['doctors'],
-      'banka': ['bank'],
-      'atm': ['atm'],
-      'okul': ['school'],
-      'üniversite': ['university'],
-      'kütüphane': ['library'],
-      'benzin': ['fuel'],
-      'akaryakıt': ['fuel'],
-      'otopark': ['parking'],
-      'cami': ['place_of_worship'],
-      'polis': ['police'],
-      'postane': ['post_office'],
-      'müze': ['tourism_museum'],
-      'sinema': ['cinema'],
-      'tiyatro': ['theatre'],
-      'fırın': ['shop_bakery'],
-      'ekmek': ['shop_bakery'],
-      'kasap': ['shop_butcher'],
-      'manav': ['shop_greengrocer'],
-      'kuaför': ['shop_hairdresser'],
-      'berber': ['shop_hairdresser'],
-      'otel': ['tourism_hotel'],
-      'konaklama': ['tourism_hotel', 'tourism_motel', 'tourism_guest_house'],
-      'park': ['leisure_park'],
-    };
-
-    final results = <String>[];
-    for (final entry in mapping.entries) {
-      if (q.contains(entry.key)) {
-        results.addAll(entry.value);
-      }
-    }
-    return results.toSet().toList();
   }
 
   bool _setEquals(Set<String> a, Set<String> b) {

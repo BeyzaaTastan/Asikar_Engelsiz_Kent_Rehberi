@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:latlong2/latlong.dart';
 import 'overpass_poi_service.dart';
 
 /// Nominatim + Overpass ile birleşik yer arama servisi.
@@ -65,9 +66,11 @@ class MapSearchService {
     onLoadingChanged(true);
 
     try {
-      // İki aramayı paralel olarak başlat
+      // İki aramayı paralel olarak başlat. Nominatim'e referans konum geçilir
+      // → sonuçlar kullanıcının çevresine bias'lanır (viewbox), uzak şehir
+      // sonuçları listeyi doldurup "en yakın" olanı gömmesin.
       final results = await Future.wait([
-        _searchNominatim(query),
+        _searchNominatim(query, refLat: userLat, refLon: userLon),
         _searchOverpassByCategory(
           query,
           centerLat: userLat ?? 40.7731,
@@ -102,7 +105,9 @@ class MapSearchService {
         }
       }
 
-      onResult(combined);
+      // Kullanıcı konumu biliniyorsa sonuçları mesafeye göre sırala
+      // (en yakın en üstte). Konum yoksa mevcut (kategori-öncelikli) sıra korunur.
+      onResult(sortResultsByDistance(combined, userLat, userLon));
     } catch (e) {
       debugPrint("Birleşik arama hatası: $e");
     } finally {
@@ -112,22 +117,56 @@ class MapSearchService {
   }
 
   /// Nominatim API ile adres/yer araması.
-  Future<List<Map<String, dynamic>>> _searchNominatim(String query) async {
+  ///
+  /// [refLat]/[refLon] verilirse sonuçlar o noktanın çevresindeki **viewbox**'a
+  /// öncelikle sınırlanır (`bounded=1`) → yerel sonuçlar döner, uzak şehirdekiler
+  /// listeyi doldurmaz ("en yakın en üstte" için). Yerel kutuda hiç sonuç yoksa
+  /// (ör. başka şehirdeki bir yerin adı arandı) **ülke geneline düşülür** →
+  /// uzak adres/yer araması yine çalışır.
+  Future<List<Map<String, dynamic>>> _searchNominatim(
+    String query, {
+    double? refLat,
+    double? refLon,
+  }) async {
     if (query.length < 3) return [];
 
+    // ~0.5° ≈ 55 km kutu — il/çevre ölçeği; uzak metropolleri dışlar.
+    const double d = 0.5;
+    final String? viewbox = (refLat != null && refLon != null)
+        // Nominatim viewbox biçimi: lon_min,lat_min,lon_max,lat_max
+        ? '${refLon - d},${refLat - d},${refLon + d},${refLat + d}'
+        : null;
+
+    // Önce yerele sınırlı ara; boşsa ülke geneli fallback (sonuç kaybolmasın).
+    var results = await _nominatimRequest(query, viewbox: viewbox, bounded: true);
+    if (results.isEmpty && viewbox != null) {
+      results = await _nominatimRequest(query, viewbox: null, bounded: false);
+    }
+    return results;
+  }
+
+  /// Tek bir Nominatim HTTP isteği (viewbox/bounded opsiyonlu).
+  Future<List<Map<String, dynamic>>> _nominatimRequest(
+    String query, {
+    String? viewbox,
+    bool bounded = false,
+  }) async {
     try {
-      final url = Uri.https(
-        'nominatim.openstreetmap.org',
-        '/search',
-        {
-          'q': query,
-          'format': 'json',
-          'addressdetails': '1',
-          'limit': '10',
-          'countrycodes': 'tr',
-          'accept-language': 'tr',
-        },
-      );
+      final params = <String, String>{
+        'q': query,
+        'format': 'json',
+        'addressdetails': '1',
+        'limit': '10',
+        'countrycodes': 'tr',
+        'accept-language': 'tr',
+      };
+      if (viewbox != null) {
+        params['viewbox'] = viewbox;
+        if (bounded) params['bounded'] = '1';
+      }
+
+      final url =
+          Uri.https('nominatim.openstreetmap.org', '/search', params);
 
       final response = await http.get(url, headers: {
         'User-Agent': 'asikar_engelsiz_kent_rehberi',
@@ -173,7 +212,10 @@ class MapSearchService {
 
       return pois.map((poi) {
         return {
-          'title': poi.name,
+          // İsimsiz kategori POI'lerine (park/otopark/tuvalet sıklıkla isimsiz)
+          // Türkçe kategori adı başlık olur → aramada "kategorisi X olan" yerler
+          // de görünür.
+          'title': poi.name.isNotEmpty ? poi.name : poi.category,
           'subtitle': poi.address ?? '${poi.category} • ${poi.wheelchairStatusText}',
           'lat': poi.latitude,
           'lon': poi.longitude,
@@ -204,4 +246,32 @@ class MapSearchService {
       onLoadingChanged(false);
     }
   }
+}
+
+/// Arama sonuçlarını kullanıcı konumuna göre mesafe sırasına dizer
+/// (en yakın en üstte). Saf/testli.
+///
+/// [userLat]/[userLon] `null` ise (konum bilinmiyor) sonuçlar **değişmeden**
+/// döner — mevcut kategori-öncelikli sıra korunur. Aksi hâlde her sonuca
+/// metre cinsi `distanceMeters` alanı eklenir (O(n) — kıyaslamada yeniden
+/// hesaplanmaz) ve buna göre kararlı biçimde sıralanır.
+List<Map<String, dynamic>> sortResultsByDistance(
+  List<Map<String, dynamic>> results,
+  double? userLat,
+  double? userLon,
+) {
+  if (userLat == null || userLon == null) return results;
+
+  final origin = LatLng(userLat, userLon);
+  const distance = Distance();
+  for (final r in results) {
+    r['distanceMeters'] = distance.as(
+      LengthUnit.Meter,
+      origin,
+      LatLng(r['lat'] as double, r['lon'] as double),
+    );
+  }
+  results.sort((a, b) =>
+      (a['distanceMeters'] as double).compareTo(b['distanceMeters'] as double));
+  return results;
 }

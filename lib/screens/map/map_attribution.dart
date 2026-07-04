@@ -8,10 +8,14 @@ import '../../constants/app_colors.dart';
 /// - Foursquare OS Places (Apache 2.0): telif satırı geliştirici dokümanında korunur
 ///   (bkz. cloudflare/poi-worker/README.md); görünür "Powered by Foursquare" bunu da kapsar.
 /// - OSM/Overpass (ODbL): "© OpenStreetMap katkıda bulunanlar" AYRI zorunlu.
+/// - OpenMapTiles: varsayılan haritanın vektör taban karoları (OpenFreeMap
+///   Liberty) OpenMapTiles şemasıyla üretilir → "© OpenMapTiles" atfı, OSM
+///   atfının YANINDA (OpenStreetMap verisi + OpenMapTiles şeması) gösterilir.
 ///
 /// Metin değişirse YALNIZCA burayı güncelle.
 const String kFoursquareAttribution = 'Powered by Foursquare';
 const String kOsmAttribution = '© OpenStreetMap katkıda bulunanlar';
+const String kOpenMapTilesAttribution = '© OpenMapTiles';
 
 /// Harita köşesinde kalıcı, okunur atıf rozeti. Marker/etiket kalabalığına
 /// gömülmemesi için yarı saydam zeminli; ilgili kaynak ekranda göründükçe görünür.
@@ -22,16 +26,21 @@ class MapAttributionBadge extends StatelessWidget {
   /// OSM atfı gösterilsin mi (temel harita OSM karolarını kullandığı için normalde hep true).
   final bool showOsm;
 
+  /// OpenMapTiles atfı gösterilsin mi (varsayılan vektör taban aktifken).
+  final bool showOpenMapTiles;
+
   const MapAttributionBadge({
     super.key,
     this.showFoursquare = true,
     this.showOsm = true,
+    this.showOpenMapTiles = false,
   });
 
   @override
   Widget build(BuildContext context) {
     final parts = <String>[
       if (showOsm) kOsmAttribution,
+      if (showOpenMapTiles) kOpenMapTilesAttribution,
       if (showFoursquare) kFoursquareAttribution,
     ];
     if (parts.isEmpty) return const SizedBox.shrink();

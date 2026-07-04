@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../constants/app_colors.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:vector_map_tiles/vector_map_tiles.dart' as vmt;
+import 'package:vector_tile_renderer/vector_tile_renderer.dart' as vtr;
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
@@ -14,10 +16,13 @@ import '../services/overpass_poi_service.dart';
 import '../services/foursquare_places_service.dart';
 import '../services/fsq_poi_service.dart';
 import '../services/overpass_query_builder.dart';
+import '../services/omt_poi_service.dart';
 import '../services/voice_search_service.dart';
+import '../services/tts_service.dart';
 import '../models/venue_model.dart';
 import '../models/osm_poi_model.dart';
 import '../providers/venue_providers.dart';
+import '../providers/user_providers.dart';
 import 'map/map_visuals.dart';
 import 'map/poi_marker.dart';
 import 'map/poi_priority.dart';
@@ -26,6 +31,7 @@ import 'map/osm_poi_sheet.dart';
 import 'map/venue_sheet.dart';
 import 'map/map_attribution.dart';
 import 'map/voice_search_button.dart';
+import 'map/voice_search_sheet.dart';
 import 'map/unknown_point_sheet.dart';
 import 'map/smart_results_overlay.dart';
 import 'map/map_type_card.dart';
@@ -61,13 +67,32 @@ class _MapScreenState extends ConsumerState<MapScreen>
   LatLng? _currentLocation;
   bool _isLoadingLocation = false;
 
+  // Harita gövdesinin (alt navigasyon çubuğunun ÜSTÜNDEKİ) gerçek yüksekliği —
+  // body Stack'i saran LayoutBuilder'dan set edilir. Arama sonuç overlay'i bunu
+  // kullanarak klavye kapalıyken alttaki boşluğa kadar uzar (bkz.
+  // SmartResultsOverlay._SearchResultsContainer).
+  double _mapBodyHeight = 0;
+
   bool _isLoading = false;
   final MapSearchService _searchService = MapSearchService();
   SettingsService? _settingsService;
 
-  // Sesli arama (cihaz OS tanıyıcısı — ücretsiz/anahtarsız)
+  // Sesli arama (cihaz OS tanıyıcısı — ücretsiz/anahtarsız). Dinleme UI'ı artık
+  // VoiceSearchSheet panelinde; map_screen yalnızca sonucu arama kutusuna yazar.
   final VoiceSearchService _voiceSearch = VoiceSearchService();
-  bool _isListening = false;
+
+  // Cihaz TTS'i — panel açılınca yönergeyi sesli okur (erişilebilirlik, $0).
+  final TtsService _tts = TtsService();
+
+  // Erişilebilirlik odaklı hızlı sesli arama önerileri (panel çipleri).
+  static const List<String> _voiceSuggestions = [
+    'Eczane',
+    'Hastane',
+    'Market',
+    'Restoran',
+    'Tuvalet',
+    'Otobüs durağı',
+  ];
 
   // Kullanıcının gerçek son aramaları — SharedPreferences'tan yüklenir
   List<Map<String, dynamic>> _recentSearches = [];
@@ -91,6 +116,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // Türkiye geneli taban katmanı (Cloudflare Worker + D1). POI_API_BASE_URL
   // boşsa devre dışı — backend deploy edilene kadar etki etmez.
   final FsqPoiService _fsqPoiService = FsqPoiService();
+  // Vektör karodan (OpenMapTiles) çıkarılan mekanları TIKLANABILIR POI'ye çevirir
+  // → haritada görünüp de diğer kaynaklarda olmayan yerler de detay paneli açar.
+  final OmtPoiService _omtPoiService = OmtPoiService();
   List<OsmPoi> _osmPois = [];
   OsmPoi? _selectedOsmPoi;
   bool _isLoadingPois = false;
@@ -99,6 +127,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _overpassLoading = false;
   bool _fsqLoading = false;
   bool _fsqOsLoading = false;
+  bool _omtLoading = false;   // OpenMapTiles vektör karo POI kaynağı
   // ignore: prefer_final_fields — set'in içeriği .add()/.remove() ile değiştiriliyor
   Set<String> _selectedPoiCategories = {};
   // POI verisi bu zoom'un altında çekilmez/gösterilmez (şehir ölçeğinde harita
@@ -113,6 +142,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
 
   _MapType _mapType = _MapType.defaultMap;
+
+  // ── Vektör taban haritası (varsayılan mod) ──────────────────────────────
+  // "Varsayılan" harita türü artık OpenFreeMap Liberty VEKTÖR karolarıyla
+  // çizilir (Google'a yakın renk paleti; su/park/yol renkleri stil dosyasından
+  // gelir, raster PNG'ye gömülü değil). Ücretsiz/anahtarsız ($0). Stil async
+  // yüklenir (StyleReader); yüklenene ya da başarısız olana kadar CartoDB
+  // Voyager RASTER fallback gösterilir (harita boş kalmasın). Uydu/Arazi
+  // modları raster kalır (bilinçli — Google da uyduyu raster gösterir).
+  static const String _libertyStyleUrl =
+      'https://tiles.openfreemap.org/styles/liberty';
+  vmt.Style? _vectorStyle;
+  // Vektör karonun kendi `poi` etiket katmanı ÇIKARILMIŞ tema (Google tarzı temiz
+  // taban). O mekanlar bunun yerine kendi tıklanabilir POI katmanımızda gösterilir
+  // (_omtPoiService). Filtre başarısızsa null → tam stil temasına düşülür.
+  vtr.Theme? _vectorTheme;
+
   bool _showTransit    = false;
   bool _showCycling    = false;
   bool _showHiking     = false;
@@ -131,16 +176,73 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _searchController.addListener(_onSearchChanged);
     _loadRecentSearches();
     _initLocationOnStart();
+    _loadVectorStyle();
+  }
+
+  /// OpenFreeMap Liberty vektör stilini async yükler (Google'a yakın palet).
+  /// Yüklenene kadar Voyager raster fallback gösterilir; hata olursa fallback'te
+  /// kalır (harita asla boş kalmaz — $0/anahtarsız katman kritik olmayan görsel
+  /// iyileştirme). Ağ/servis KVKK açısından konum/kişisel veri taşımaz.
+  Future<void> _loadVectorStyle() async {
+    try {
+      final style = await vmt.StyleReader(uri: _libertyStyleUrl).read();
+
+      // Vektör karonun kendi `poi` etiketlerini gizle: stil JSON'ından
+      // source-layer=='poi' katmanlarını çıkarıp temayı yeniden kur. O mekanlar
+      // yerine kendi TIKLANABILIR POI katmanımızda gösterilir (_omtPoiService).
+      // Sokak/mahalle/su adları KALIR (yalnız tekil POI etiketleri çıkar).
+      vtr.Theme? filteredTheme;
+      try {
+        final resp = await http.get(Uri.parse(_libertyStyleUrl));
+        if (resp.statusCode == 200) {
+          final styleJson = json.decode(resp.body) as Map<String, dynamic>;
+          final layers = styleJson['layers'];
+          if (layers is List) {
+            layers.removeWhere(
+                (l) => l is Map && l['source-layer'] == 'poi');
+            filteredTheme = vtr.ThemeReader().read(styleJson);
+          }
+        }
+      } catch (_) {
+        // Filtre başarısızsa tam temayla devam (poi etiketleri görünür kalır).
+      }
+
+      // OMT POI kaynağı: openmaptiles sağlayıcısını servise ver (aynı karolar).
+      final provider = style.providers.tileProviderBySource['openmaptiles'] ??
+          (style.providers.tileProviderBySource.isNotEmpty
+              ? style.providers.tileProviderBySource.values.first
+              : null);
+      if (provider != null) _omtPoiService.setProvider(provider);
+
+      if (!mounted) return;
+      setState(() {
+        _vectorStyle = style;
+        _vectorTheme = filteredTheme;
+      });
+
+      // Stil geldi → görünür alanı yeniden çek ki OMT POI kaynağı da katılsın
+      // (ilk çekim stil yüklenmeden olduysa OMT devre dışıydı). Diğer kaynaklar
+      // bbox cache'inden döner (kota etkilenmez).
+      if (_mapReady && _currentZoom >= _poiFetchMinZoom) {
+        _fetchPoisForVisibleArea(_mapController.camera.visibleBounds,
+            immediate: true);
+      }
+    } catch (_) {
+      // Stil yüklenemezse (OpenFreeMap erişilemez vb.) raster Voyager'da kalınır
+      // (_vectorStyle null → children'da TileLayer fallback'i çizilir).
+    }
   }
 
   @override
   void dispose() {
     _moveAnimController?.dispose();
     _voiceSearch.cancel();
+    _tts.stop();
     _searchService.dispose();
     _overpassPoiService.dispose();
     _foursquareService.dispose();
     _fsqPoiService.dispose();
+    _omtPoiService.dispose();
     _searchController.dispose();
     _sheetController.dispose();
     super.dispose();
@@ -162,8 +264,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
       _isSearchFieldEmpty = _searchController.text.isEmpty;
     });
 
+    // Mesafe sıralaması + Overpass kategori araması için referans konum:
+    // öncelik kullanıcının GPS konumu; yoksa (izin verilmemiş/henüz
+    // çözülmemiş) haritanın baktığı MERKEZ (görünen alan). Böylece sıralama
+    // HER ZAMAN çalışır — "en yakın en üstte" korunur, aksi hâlde konum
+    // null iken sonuçlar sırasız kalıyordu. Harita hazır değilse Sakarya
+    // merkezi fallback.
+    final LatLng ref = _currentLocation ??
+        (_mapReady ? _mapController.camera.center : _sakaryaCenter);
+
     _searchService.debouncedSearch(
       query: _searchController.text,
+      // Sonuçlar bu konuma göre mesafe sıralanır (en yakın en üstte);
+      // Overpass kategori araması da bu merkezden yapılır.
+      userLat: ref.latitude,
+      userLon: ref.longitude,
       onResult: (results) {
         if (mounted) setState(() => _nearbySuggestions = results);
       },
@@ -173,63 +288,27 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  /// Sesli arama mikrofonuna dokununca: dinliyorsa durdurur; değilse izin alıp
-  /// dinlemeye başlar. Tanınan metin arama kutusuna yazılır → mevcut arama akışı
+  /// Sesli arama mikrofonuna dokununca Aşikar sesli arama panelini açar
+  /// (`VoiceSearchSheet`): dinleme/hata/canlı metin oradadır. Panel tanınan metni
+  /// (veya seçilen öneriyi) döndürür → arama kutusuna yazılır → mevcut arama akışı
   /// (`_onSearchChanged` → debounce'lı Nominatim/Overpass) kendiliğinden tetiklenir.
   Future<void> _onVoiceSearchPressed() async {
-    if (_isListening) {
-      await _voiceSearch.stop();
-      if (mounted) setState(() => _isListening = false);
-      return;
-    }
-
-    final available = await _voiceSearch.initialize(
-      onStatus: (status) {
-        // 'done' / 'notListening' → OS dinlemeyi bitirdi.
-        if (mounted &&
-            _isListening &&
-            (status == 'done' || status == 'notListening')) {
-          setState(() => _isListening = false);
-        }
-      },
-      onError: (_) {
-        if (!mounted) return;
-        setState(() => _isListening = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-              content: Text(
-                  'Sesli arama başlatılamadı. Mikrofon iznini kontrol edin.')),
-        );
-      },
+    // Yönerge yalnızca görme desteğine ihtiyacı olan kullanıcıya sesli okunur.
+    final speakPrompt = ref.read(visualSupportProvider).valueOrNull ?? false;
+    final result = await showVoiceSearchSheet(
+      context,
+      service: _voiceSearch,
+      tts: _tts,
+      speakPrompt: speakPrompt,
+      suggestions: _voiceSuggestions,
     );
+    if (!mounted || result == null || result.isEmpty) return;
 
-    if (!available) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text(
-                'Cihazınızda sesli arama (konuşma tanıma) kullanılamıyor.')),
-      );
-      return;
-    }
-
-    if (mounted) {
-      setState(() {
-        _isSearchActive = true;
-        _isListening = true;
-      });
-    }
-
-    await _voiceSearch.listen(
-      onResult: (text, isFinal) {
-        if (!mounted) return;
-        // Metni yaz → _onSearchChanged listener'ı aramayı tetikler.
-        _searchController.text = text;
-        _searchController.selection =
-            TextSelection.fromPosition(TextPosition(offset: text.length));
-        if (isFinal) setState(() => _isListening = false);
-      },
-    );
+    // Metni yaz → _onSearchChanged listener'ı aramayı tetikler.
+    setState(() => _isSearchActive = true);
+    _searchController.text = result;
+    _searchController.selection =
+        TextSelection.fromPosition(TextPosition(offset: result.length));
   }
 
   void _onVenueMarkerTapped(VenueModel venue) {
@@ -475,6 +554,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Widget build(BuildContext context) {
     // Firestore'daki gerçek venue verilerini Riverpod ile izle
     final venuesAsync = ref.watch(venuesStreamProvider);
+    // Görme desteği tercihini sıcak tut (sesli arama yönergesi için) — böylece
+    // mikrofona basıldığında ref.read yüklü değeri döndürür (bkz. _onVoiceSearchPressed).
+    ref.watch(visualSupportProvider);
 
     return Scaffold(
       appBar: !_isSearchActive
@@ -500,7 +582,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
               ],
             )
           : null,
-      body: Stack(
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          // Gövde = alt navigasyon çubuğunun ÜSTÜNDEKİ gerçek alan. Scaffold
+          // klavye açılınca burayı küçülttüğü için bu yükseklik klavyeyi zaten
+          // dışlar. Arama sonuç overlay'i bunu kullanıp klavye kapalıyken
+          // alttaki boşluğa kadar uzar (bkz. SmartResultsOverlay).
+          _mapBodyHeight = constraints.maxHeight;
+          return Stack(
         children: [
           // 1. KATMAN: OpenStreetMap Haritası
           FlutterMap(
@@ -554,14 +643,29 @@ class _MapScreenState extends ConsumerState<MapScreen>
               },
             ),
             children: [
-              // ── Temel harita karosu (seçili türe göre dinamik) ──
-              TileLayer(
-                urlTemplate: _baseTileUrl,
-                subdomains: _mapType == _MapType.defaultMap
-                    ? const ['a', 'b', 'c', 'd']
-                    : const [],
-                userAgentPackageName: 'com.example.asikar_engelsiz_kent_rehberi',
-              ),
+              // ── Temel harita katmanı ──────────────────────────────────
+              // Varsayılan mod: OpenFreeMap Liberty VEKTÖR karo (Google'a yakın
+              // palet, $0/anahtarsız). Stil henüz yüklenmediyse (ya da yüklenemediyse)
+              // CartoDB Voyager RASTER fallback — harita boş kalmaz. Uydu/Arazi
+              // modları her zaman raster.
+              if (_mapType == _MapType.defaultMap && _vectorStyle != null)
+                vmt.VectorTileLayer(
+                  tileProviders: _vectorStyle!.providers,
+                  // poi etiketleri çıkarılmış tema (varsa); değilse tam stil.
+                  theme: _vectorTheme ?? _vectorStyle!.theme,
+                  sprites: _vectorStyle!.sprites,
+                  // Kaynak maxzoom'u 14; harita 18'e kadar overzoom eder.
+                  maximumZoom: 18,
+                )
+              else
+                TileLayer(
+                  urlTemplate: _baseTileUrl,
+                  subdomains: _mapType == _MapType.defaultMap
+                      ? const ['a', 'b', 'c', 'd']
+                      : const [],
+                  userAgentPackageName:
+                      'com.example.asikar_engelsiz_kent_rehberi',
+                ),
               // ── Toplu taşıma katmanı (OpenRailwayMap) ──
               if (_showTransit)
                 TileLayer(
@@ -731,12 +835,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ),
                         ),
                         if (_isSearchActive)
-                          // Dinlerken veya alan boşken: sesli arama mikrofonu.
-                          // Metin varken: temizle (×). Dinleme sırasında partial
-                          // sonuçlar alanı doldursa da mikrofon (kırmızı) kalır.
-                          (_isListening || _isSearchFieldEmpty
+                          // Alan boşken: sesli arama mikrofonu (dokununca panel
+                          // açılır). Metin varken: temizle (×).
+                          (_isSearchFieldEmpty
                               ? VoiceSearchButton(
-                                  isListening: _isListening,
+                                  isListening: false,
                                   onTap: _onVoiceSearchPressed,
                                 )
                               : IconButton(
@@ -745,53 +848,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                   onPressed: () => _searchController.clear(),
                                 ))
                         else
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                  height: 24,
-                                  width: 1,
-                                  color: Colors.grey.shade300),
-                              IconButton(
-                                icon: const Icon(Icons.tune,
-                                    color: AppColors.primary),
-                                onPressed: () {},
-                              ),
-                            ],
+                          // Arama açılmadan önce de sesli arama mikrofonu
+                          // (dokununca panel açılır — aktif haldekiyle aynı).
+                          VoiceSearchButton(
+                            isListening: false,
+                            onTap: _onVoiceSearchPressed,
                           ),
                       ],
                     ),
                   ),
                 ),
-                // Sesli arama dinleme göstergesi — ekran okuyucu için liveRegion.
-                if (_isListening)
-                  Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Semantics(
-                      liveRegion: true,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 14, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: AppColors.danger.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.mic,
-                                size: 16, color: AppColors.danger),
-                            const SizedBox(width: 6),
-                            const Text('Dinleniyor…',
-                                style: TextStyle(
-                                    color: AppColors.danger,
-                                    fontSize: 13,
-                                    fontWeight: FontWeight.w600)),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
+                // NOT: Sesli arama dinleme göstergesi artık VoiceSearchSheet
+                // panelinde (nabız animasyonu + canlı metin + liveRegion durum).
                 // NOT: Erişilebilirlik filtre çipleri (Tekerlekli Sandalye /
                 // Hissedilebilir Yüzey / Asansör / Engelli Otoparkı) buradan
                 // kaldırıldı — aynı katmanlar harita filtreleme modalında
@@ -819,19 +887,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
             ),
 
           // 3. KATMAN: Arama Sonuçları
+          // bottom VERİLMEZ: dikey kısıt gevşek kalır ki overlay içeriği kadar
+          // yükselsin (yükseklik/scroll tavanı SmartResultsOverlay içinde,
+          // gövde yüksekliğine göre: klavye kapalıyken alttaki boşluğa kadar
+          // uzar). bottom eklemek paneli tekrar tüm ekrana yayar.
           if (_isSearchActive)
             Positioned(
               top: MediaQuery.of(context).padding.top + 88,
               left: 16,
               right: 16,
-              bottom: 16,
               child: _buildSmartResultsOverlay(),
             ),
 
-          // 4. KATMAN: Konumum Butonu
+          // 4. KATMAN: Konumum Butonu (yol tarifi FAB'ının üstünde)
           if (!_isSearchActive && !_isPlaceSelected)
             Positioned(
-              bottom: 32,
+              bottom: 100,
               right: 16,
               child: InkWell(
                 onTap: _getCurrentLocation,
@@ -876,11 +947,39 @@ class _MapScreenState extends ConsumerState<MapScreen>
               ),
             ),
 
+          // 4a2. KATMAN: Yol Tarifi FAB (konum butonunun ALTINDA) — hedef seçme
+          // ekranını (DirectionsSearchScreen) açar.
+          if (!_isSearchActive && !_isPlaceSelected)
+            Positioned(
+              bottom: 32,
+              right: 16,
+              child: Semantics(
+                button: true,
+                label: 'Yol tarifi',
+                child: Material(
+                  color: AppColors.secondary,
+                  borderRadius: BorderRadius.circular(18),
+                  elevation: 4,
+                  shadowColor: Colors.black38,
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(18),
+                    onTap: () =>
+                        Navigator.pushNamed(context, AppRoutes.directions),
+                    child: const SizedBox(
+                      width: 56,
+                      height: 56,
+                      child: Icon(Icons.directions, color: Colors.white, size: 28),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           // 4b. KATMAN: Harita Türü / Katman Seçici Butonu
           if (!_isSearchActive)
             Positioned(
               right: 16,
-              bottom: _isPlaceSelected ? 260 : 100,
+              bottom: _isPlaceSelected ? 260 : 168,
               child: Material(
                 color: Colors.white,
                 shape: const CircleBorder(),
@@ -899,10 +998,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
               ),
             ),
 
-          // 4c. Yükleniyor göstergesi (Overpass veya POI)
+          // 4c. Yükleniyor göstergesi (Overpass veya POI) — katman butonu hizasında
           if (_isLoadingOverpass || _isLoadingPois)
             Positioned(
-              bottom: _isPlaceSelected ? 260 : 100,
+              bottom: _isPlaceSelected ? 260 : 168,
               right: 70,
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -940,6 +1039,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 showFoursquare: _osmPois.any((p) => p.isFoursquare),
                 showOsm: _mapType != _MapType.satellite ||
                     _osmPois.any((p) => !p.isFoursquare),
+                // Varsayılan vektör taban (OpenFreeMap Liberty) aktifken
+                // OpenMapTiles atfı da zorunlu.
+                showOpenMapTiles:
+                    _mapType == _MapType.defaultMap && _vectorStyle != null,
               ),
             ),
 
@@ -979,6 +1082,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
               },
             ),
         ],
+          );
+        },
       ),
     );
   }
@@ -1021,6 +1126,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       items: _isSearchFieldEmpty ? _recentSearches : _nearbySuggestions,
       onItemTap: _onSearchItemTapped,
       onClearHistory: _clearRecentSearches,
+      availableHeight: _mapBodyHeight > 0 ? _mapBodyHeight : null,
     );
   }
 
@@ -1055,10 +1161,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
       await _settingsService?.addRecentMapSearch(entry);
       if (mounted) {
         setState(() {
-          // Listeyi hemen güncelle (uygulama kapatılıp açılmadan gözükecek)
+          // Listeyi hemen güncelle (uygulama kapatılıp açılmadan gözükecek).
+          // Sınır SettingsService.addRecentMapSearch ile aynı (maks. 15) —
+          // overlay kaydırılabilir olduğundan klavye kapalıyken daha fazlası görünür.
           _recentSearches.removeWhere((e) => e['title'] == title);
           _recentSearches.insert(0, {...entry, 'type': 'recent'});
-          if (_recentSearches.length > 5) _recentSearches.removeRange(5, _recentSearches.length);
+          if (_recentSearches.length > 15) {
+            _recentSearches.removeRange(15, _recentSearches.length);
+          }
         });
       }
     }
@@ -1074,6 +1184,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         // OpenTopoMap (OSM tabanlı arazi haritası)
         return 'https://tile.opentopomap.org/{z}/{x}/{y}.png';
       case _MapType.defaultMap:
+        // Yalnızca FALLBACK: vektör stil (OpenFreeMap Liberty) yüklenene ya da
+        // yüklenemezse gösterilir. Voyager Google'a en yakın ücretsiz raster
+        // stildir → boşken bile tutarlı görünüm (bkz. _loadVectorStyle).
         return 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
     }
   }
@@ -1489,17 +1602,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ? OverpassPoiService.quickFilterCategories.toSet()
         : _selectedPoiCategories;
 
-    // Üç kaynak ayrı biter; gösterge hepsi bitince kapanır. Taban katmanı
-    // (fsq_os) yalnızca backend yapılandırılmışsa yüklenir.
+    // Dört kaynak ayrı biter; gösterge hepsi bitince kapanır. Taban katmanı
+    // (fsq_os) yalnızca backend yapılandırılmışsa; OMT yalnızca vektör stil
+    // yüklenip sağlayıcı hazırsa yüklenir.
     _overpassLoading = true;
     _fsqLoading = true;
     _fsqOsLoading = _fsqPoiService.isEnabled;
+    _omtLoading = _omtPoiService.isEnabled;
     if (mounted) setState(() => _isLoadingPois = true);
 
     void syncLoading() {
       if (mounted) {
-        setState(() =>
-            _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading);
+        setState(() => _isLoadingPois = _overpassLoading ||
+            _fsqLoading ||
+            _fsqOsLoading ||
+            _omtLoading);
       }
     }
 
@@ -1510,7 +1627,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final merged = MapVisuals.mergePois(_osmPois, overpassPois);
       setState(() {
         _osmPois = merged;
-        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+        _isLoadingPois =
+            _overpassLoading || _fsqLoading || _fsqOsLoading || _omtLoading;
       });
     }
 
@@ -1526,7 +1644,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final merged = MapVisuals.mergePois(fsqPois, _osmPois);
       setState(() {
         _osmPois = merged;
-        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+        _isLoadingPois =
+            _overpassLoading || _fsqLoading || _fsqOsLoading || _omtLoading;
       });
     }
 
@@ -1542,12 +1661,32 @@ class _MapScreenState extends ConsumerState<MapScreen>
       final merged = MapVisuals.mergePois(_osmPois, basePois);
       setState(() {
         _osmPois = merged;
-        _isLoadingPois = _overpassLoading || _fsqLoading || _fsqOsLoading;
+        _isLoadingPois =
+            _overpassLoading || _fsqLoading || _fsqOsLoading || _omtLoading;
       });
     }
 
     void onFsqOsLoading(bool loading) {
       _fsqOsLoading = loading;
+      syncLoading();
+    }
+
+    void onOmtResult(List<OsmPoi> omtPois) {
+      if (!mounted) return;
+      _omtLoading = false;
+      // OMT (OpenMapTiles = OSM verisi) boşluk doldurucu: mevcut (_osmPois)
+      // öncelikli kalır, yalnız haritada görünüp de diğer kaynaklarda OLMAYAN
+      // mekanları ekler (dedup MapVisuals.mergePois — koordinat + 40m isim).
+      final merged = MapVisuals.mergePois(_osmPois, omtPois);
+      setState(() {
+        _osmPois = merged;
+        _isLoadingPois =
+            _overpassLoading || _fsqLoading || _fsqOsLoading || _omtLoading;
+      });
+    }
+
+    void onOmtLoading(bool loading) {
+      _omtLoading = loading;
       syncLoading();
     }
 
@@ -1572,6 +1711,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         selectedCategories: effectiveCategories,
         onResult: onFsqOsResult,
         onLoadingChanged: onFsqOsLoading,
+      );
+      _omtPoiService.fetchForBounds(
+        bounds: bounds,
+        onResult: onOmtResult,
+        onLoadingChanged: onOmtLoading,
       );
       return;
     }
@@ -1600,6 +1744,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
       selectedCategories: effectiveCategories,
       onResult: onFsqOsResult,
       onLoadingChanged: onFsqOsLoading,
+    );
+
+    // OpenMapTiles vektör karo POI'leri: haritada görünen ama diğer kaynaklarda
+    // olmayan mekanları tıklanabilir yapar (aynı karolar, ekstra servis yok).
+    _omtPoiService.debouncedFetch(
+      bounds: bounds,
+      onResult: onOmtResult,
+      onLoadingChanged: onOmtLoading,
     );
   }
 

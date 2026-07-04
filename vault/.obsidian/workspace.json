@@ -74,8 +74,7 @@
       }
     ],
     "direction": "horizontal",
-    "width": 300,
-    "collapsed": true
+    "width": 300
   },
   "right": {
     "id": "7ff3018b8b8292bd",
@@ -179,6 +178,10 @@
   },
   "active": "7381710338e7c71b",
   "lastOpenFiles": [
+    "06-Security/08-Guvenlik.md",
+    "05-Infrastructure/05-Barindirma.md",
+    "00-Overview/Architecture-Overview.md",
+    "2026-06-27.md",
     "05-Infrastructure/07-CI-CD.md.tmp.8236.3f07509cb9df",
     "05-Infrastructure/07-CI-CD.md.tmp.8236.1fff4062c63c",
     "01-Frontend/01-On-Yuz.md.tmp.8236.9cc4f52f1d6c",
@@ -189,14 +192,11 @@
     "07-Performance/10-Cache-CDN.md.tmp.24088.e655efaa931d",
     "01-Frontend/01-On-Yuz.md.tmp.24088.d71d1089725d",
     "01-Frontend/01-On-Yuz.md.tmp.24088.0d695cc74c1b",
-    "07-Performance/11-Olcekleme.md.tmp.24088.5875ee53bec8",
     "00-Overview/Vision.md",
-    "2026-06-27.md",
     "00-Overview/PRD.md",
     "05-Infrastructure/06-Bulut.md",
     "07-Performance/10-Cache-CDN.md",
     "03-Data/03-Veritabani.md",
-    "08-Reliability/12-Loglama.md",
-    "00-Overview/Architecture-Overview.md"
+    "08-Reliability/12-Loglama.md"
   ]
 }

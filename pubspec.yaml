@@ -39,6 +39,17 @@ dependencies:
   firebase_auth: ^6.3.0
   google_sign_in: ^7.2.0
   flutter_map: ^8.3.0
+  # Varsayılan haritada Google'a yakın palet için OpenFreeMap Liberty VEKTÖR
+  # karoları (ücretsiz/anahtarsız). 9.0.0-beta.8 flutter_map 8.x'i destekler ve
+  # flutter_gpu'ya bağımlı DEĞİL (10.x aksine) — pub.dev production için bunu önerir.
+  vector_map_tiles: 9.0.0-beta.8
+  # Vektör karonun kendi POI etiketlerini gizleyip (tema filtresi) o mekanları
+  # kendi TIKLANABILIR POI katmanımıza taşımak için: vector_tile_renderer =
+  # ThemeReader (poi katmanını çıkarıp temayı yeniden kur); vector_tile = MVT
+  # decode (aynı OpenMapTiles karolarından poi feature'larını OsmPoi'ye çevir).
+  # Sürümler vector_map_tiles 9.0.0-beta.8 ile birebir (transitive → direct).
+  vector_tile_renderer: 6.1.0
+  vector_tile: 2.0.1
   latlong2: ^0.9.1
   geolocator: ^14.0.2
   http: ^1.6.0
@@ -58,6 +69,7 @@ dependencies:
   firebase_crashlytics: ^5.2.4
   firebase_analytics: ^12.4.3
   speech_to_text: ^7.4.0
+  flutter_tts: ^4.2.3
 
 dev_dependencies:
   flutter_test:

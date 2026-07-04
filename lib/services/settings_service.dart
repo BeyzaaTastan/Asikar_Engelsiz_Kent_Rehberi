@@ -61,8 +61,9 @@ class SettingsService {
     });
     // En başa ekle
     list.insert(0, _encodeJson(item));
-    // Maksimum 5 tane sakla
-    final trimmed = list.take(5).toList();
+    // Maksimum 15 tane sakla — arama overlay'i kaydırılabilir olduğundan
+    // (bkz. SmartResultsOverlay) klavye kapalıyken daha fazla geçmiş görünür.
+    final trimmed = list.take(15).toList();
     await _prefs.setStringList('recent_map_searches', trimmed);
   }
 
